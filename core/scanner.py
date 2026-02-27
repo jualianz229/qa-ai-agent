@@ -16,43 +16,13 @@ class Scanner:
 
     # ─── Project Setup ──────────────────────────────────────────────────────
 
-    def get_website_info(self, url: str) -> dict:
-        """Fetch URL, get title, prep project info."""
+    def scan_website(self, url: str, use_auth: bool = False) -> tuple[dict, dict, str]:
+        """Buka halaman menggunakan Playwright, tangkap elemen statis/dinamis, dan ambil screenshot."""
+        from playwright.sync_api import sync_playwright
+        import tempfile
+        
         domain = urlparse(url).netloc.replace("www.", "") or "unknown"
-        title  = ""
-
-        console.print(f"\n[dim]  Mengambil info website menggunakan requests...[/dim]")
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Upgrade-Insecure-Requests": "1"
-            }
-            r = requests.get(url, headers=headers, timeout=15)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.text, 'html.parser')
-            title = soup.title.string.strip() if soup.title and soup.title.string else ""
-        except Exception:
-            title = ""
-
-        safe_title   = re.sub(r'[<>:"/\\|?*]', '', title).strip()[:40] if title else ""
-        project_name = f"{domain} {safe_title}" if safe_title else domain
-        safe_folder  = re.sub(r'[^\w\s-]', '_', project_name).strip()
-
-        console.print(f"[green]  Target: [bold]{safe_folder}[/bold][/green]")
-
-        return {
-            "title":           title or domain,
-            "domain":          domain,
-            "project_name":    project_name
-        }
-
-    def capture_page_info(self, url: str) -> dict:
-        """
-        Buka halaman dan ekstrak elemen secara statis (tanpa JS execution).
-        """
-        console.print(f"[dim]  Scanning halaman (Static HTML)...[/dim]")
+        
         info = {
             "title":    "",
             "url":      url,
@@ -64,18 +34,73 @@ class Scanner:
             "images":   [],
             "apis":     [],
         }
-
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Upgrade-Insecure-Requests": "1"
-            }
-            r = requests.get(url, headers=headers, timeout=15)
-            soup = BeautifulSoup(r.text, 'html.parser')
+        
+        console.print(f"[dim]  Membuka browser Playwright ke {url}...[/dim]")
+        screenshot_path = ""
+        
+        with sync_playwright() as p:
+            # Pengecekan auth
+            browser_args = {"headless": True}
+            auth_file = "auth_state.json"
             
-            info["title"] = soup.title.string.strip() if soup.title and soup.title.string else ""
+            browser = p.chromium.launch(**browser_args)
+            video_dir = Path("Result") / "Visual_Evidence"
+            video_dir.mkdir(parents=True, exist_ok=True)
+            context_kwargs = {
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "viewport": {"width": 1280, "height": 720},
+                "record_video_dir": str(video_dir),
+                "record_video_size": {"width": 1280, "height": 720}
+            }
+            if use_auth and os.path.exists(auth_file):
+                console.print(f"[green]  Menggunakan bypass login ({auth_file})[/green]")
+                context_kwargs["storage_state"] = auth_file
+                
+            context = browser.new_context(**context_kwargs)
+            page = context.new_page()
+            
+            # API Interception untuk deteksi endpoint
+            def handle_route(route):
+                request_url = route.request.url
+                if "/api/" in request_url and urlparse(request_url).netloc == urlparse(url).netloc:
+                    if request_url not in info["apis"]:
+                        info["apis"].append(request_url)
+                route.continue_()
+            
+            page.route("**/*", handle_route)
+            
+            try:
+                page.goto(url, wait_until="networkidle", timeout=20000)
+            except Exception as e:
+                console.print(f"[yellow]  Warning goto: {e}. Melanjutkan analisa DOM.[/yellow]")
+                
+            # --- Auto-Clicker Spider ---
+            console.print(f"[dim]  Memulai Auto-Clicker Spider (Trigger animasi/popup)...[/dim]")
+            try:
+                page.evaluate("""
+                    () => {
+                        const buttons = document.querySelectorAll('button, .btn, .dropdown, [role="button"], [aria-haspopup="true"]');
+                        let count = 0;
+                        for (const b of buttons) {
+                            if (count > 15) break; 
+                            try { b.click(); count++; } catch (e) {}
+                        }
+                    }
+                """)
+                page.wait_for_timeout(2000) # Tunggu animasi render
+            except Exception as e:
+                console.print(f"[yellow]  Warning Spider: {e}[/yellow]")
+            # ---------------------------
+                
+            title = page.title()
+            info["title"] = title
+            
+            safe_title   = re.sub(r'[<>:"/\\|?*]', '', title).strip()[:40] if title else ""
+            project_name = f"{domain} {safe_title}" if safe_title else domain
+            
+            # Mengambil HTML utuh setelah JS render
+            html_content = page.content()
+            soup = BeautifulSoup(html_content, 'html.parser')
             
             # Headings
             for tag in ["h1","h2","h3","h4","h5"]:
@@ -119,39 +144,60 @@ class Scanner:
             for img in soup.find_all('img', limit=6):
                 alt = img.get('alt') or img.get('src') or ''
                 if alt: info["images"].append(alt[:80])
-                
-            # Scan API dari file JS (Cari endpoint /api/)
-            try:
-                for script in soup.find_all('script', src=True)[:3]:
-                    js_src = script['src']
-                    js_url = js_src if js_src.startswith('http') else url.rstrip('/') + '/' + js_src.lstrip('/')
-                    js_r = requests.get(js_url, headers=headers, timeout=5)
-                    if js_r.status_code == 200:
-                        endpoints = re.findall(r'[\'"](/api/v\d+/[a-zA-Z0-9_/-]+)[\'"]', js_r.text)
-                        if endpoints: info["apis"].extend(endpoints)
-            except Exception:
-                pass
-            info["apis"] = list(set(info["apis"]))[:10]
-
-            n_h = len(info["headings"])
-            n_t = len(info["texts"])
-            n_b = len(info["buttons"])
-            n_l = len(info["links"])
-            n_f = len(info["forms"])
-            n_a = len(info["apis"])
-            console.print(
-                f"[green]  Scan selesai:[/green] "
-                f"[cyan]{n_h}[/cyan] heading  "
-                f"[cyan]{n_t}[/cyan] teks  "
-                f"[cyan]{n_b}[/cyan] tombol  "
-                f"[cyan]{n_l}[/cyan] link  "
-                f"[cyan]{n_f}[/cyan] form  "
-                f"[cyan]{n_a}[/cyan] api"
-            )
-        except Exception as e:
-            console.print(f"[yellow]  Warning scan: {e}[/yellow]")
             
-        return info
+            # Take Screenshot & Save Video path
+            tmp_dir = Path(tempfile.gettempdir())
+            scr_name = re.sub(r'[^\w]', '_', project_name).lower()[:40] + ".png"
+            screenshot_path = str(tmp_dir / scr_name)
+            try:
+                page.screenshot(path=screenshot_path, full_page=True)
+                console.print(f"[dim]  Screenshot berhasil ditangkap.[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]  Gagal screenshot: {e}[/yellow]")
+                screenshot_path = ""
+                
+            video_path = ""
+            if page.video:
+                video_path = page.video.path()
+            
+            browser.close()
+            
+            if video_path and os.path.exists(video_path):
+                import shutil
+                # Rename the chaotic playwright video name
+                final_v_name = f"{scr_name.replace('.png', '')}_{datetime.now().strftime('%H%M%S')}.webm"
+                final_v_path = video_dir / final_v_name
+                try:
+                    shutil.move(video_path, str(final_v_path))
+                    console.print(f"[dim]  Video tersimpan di Result/Visual_Evidence/{final_v_name}[/dim]")
+                except Exception as e:
+                    console.print(f"[yellow]  Gagal rename video: {e}[/yellow]")
+
+        project_info = {
+            "title":           title or domain,
+            "domain":          domain,
+            "project_name":    project_name
+        }
+        
+        info["apis"] = list(set(info["apis"]))[:10]
+
+        n_h = len(info["headings"])
+        n_t = len(info["texts"])
+        n_b = len(info["buttons"])
+        n_l = len(info["links"])
+        n_f = len(info["forms"])
+        n_a = len(info["apis"])
+        console.print(
+            f"[green]  Scan selesai:[/green] "
+            f"[cyan]{n_h}[/cyan] heading  "
+            f"[cyan]{n_t}[/cyan] teks  "
+            f"[cyan]{n_b}[/cyan] tombol  "
+            f"[cyan]{n_l}[/cyan] link  "
+            f"[cyan]{n_f}[/cyan] form  "
+            f"[cyan]{n_a}[/cyan] api"
+        )
+            
+        return project_info, info, screenshot_path
 
     # ─── Data Save ─────────────────────────────────────────────────────────
 
@@ -162,7 +208,7 @@ class Scanner:
         output = io.StringIO()
         if data_list and len(data_list) > 0:
             # Pastikan urutan kunci sesuai dengan standar QA
-            fieldnames = ["ID", "Module", "Category", "Title", "Precondition", "Steps to Reproduce", "Expected Result", "Actual Result", "Severity", "Priority", "Evidence"]
+            fieldnames = ["ID", "Module", "Category", "Test Type", "Title", "Precondition", "Steps to Reproduce", "Expected Result", "Actual Result", "Severity", "Priority", "Evidence"]
             # Fallback jika field AI tidak sengaja beda
             actual_keys = list(data_list[0].keys())
             if not all(field in actual_keys for field in fieldnames[:4]):

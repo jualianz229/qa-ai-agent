@@ -33,7 +33,7 @@ runner   = Scanner()
 # Pastikan folder instructions ada
 Path("instructions").mkdir(exist_ok=True)
 
-def process_single_url(url: str, instruction: str, csv_sep: str):
+def process_single_url(url: str, instruction: str, csv_sep: str, use_auth: bool):
     # Auto-Scheme (Bypass URL nyasar tanpa https)
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
@@ -41,17 +41,16 @@ def process_single_url(url: str, instruction: str, csv_sep: str):
     # ── 3. Scan Halaman Web ────────────────────────────────────────────────
     console.print(Rule(f"[bold]Mencerna Halaman Website: {url}[/bold]"))
     
-    with console.status(f"[bold yellow]Mengunduh & Memindai Struktur HTML ({url})...[/bold yellow]", spinner="dots"):
-        proj = runner.get_website_info(url)
-        page_info = runner.capture_page_info(url)
+    with console.status(f"[bold yellow]Meluncurkan Browser Headless & Memindai Struktur HTML ({url})...[/bold yellow]", spinner="dots"):
+        proj, page_info, screenshot = runner.scan_website(url, use_auth)
     
     # ── 4. Generate CSV Scenario ───────────────────────────────────────────
     console.print(Rule(f"[bold]Generate Test Scenarios (CSV) untuk {url}[/bold]"))
     
-    with console.status(f"[bold green]AI ({ai.current_model}) sedang menganalisa struktur web dan mengkonstruksi Skenario Test...[/bold green]"):
+    with console.status(f"[bold green]AI ({ai.current_model}) sedang menganalisa Visual & DOM untuk mengkonstruksi Skenario Test...[/bold green]"):
         try:
             parsed_data = ai.generate_test_scenarios(
-                url, proj["title"], page_info, instruction, csv_sep
+                url, proj["title"], page_info, instruction, csv_sep, screenshot
             )
             saved_csv_path = runner.save_csv_scenarios(parsed_data, proj, csv_sep)
             console.print(f"  [green]✓[/green] Format Skenario CSV digenerate: [dim]{saved_csv_path}[/dim]")
@@ -95,6 +94,13 @@ def main():
     sep_choice = console.input("  [cyan]Pilih [1/2] (Default: 1): [/cyan]").strip()
     csv_sep = ";" if sep_choice == "2" else ","
 
+    # Pilihan Authentication Bypass
+    console.print("\n[bold]Bypass Authentication (Login Sesion)[/bold]")
+    console.print("  [1] Tanpa Login (Standard Test)")
+    console.print("  [2] Gunakan auth_state.json jika ada (Untuk masuk Dashboard)")
+    auth_choice = console.input("  [cyan]Pilih [1/2] (Default: 1): [/cyan]").strip()
+    use_auth = True if auth_choice == "2" else False
+
     # ── 2. Input Instruksi ─────────────────────────────────────────────────
     console.print("\n[bold]Step 2: Input Instruksi (Opsional) | Ketik /profile_name.txt untuk me-load profil[/bold]")
     instruction = ""
@@ -132,7 +138,7 @@ def main():
     console.print("\n[bold green]=== MEMULAI GENERASI TEST SCENARIOS ===[/bold green]\n")
     
     for url in urls_to_process:
-        process_single_url(url, instruction, csv_sep)
+        process_single_url(url, instruction, csv_sep, use_auth)
         console.print("\n")
 
     console.print("[bold green]Semua Tugas Selesai![/bold green]")

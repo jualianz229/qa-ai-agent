@@ -3,3 +3,5 @@ beautifulsoup4
 rich
 google-genai
 python-dotenv
+playwright
+Pillow

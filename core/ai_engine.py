@@ -24,7 +24,7 @@ MAXIMIZE THE NUMBER OF TEST CASES! You MUST include:
 - Error validations (Missing fields, wrong formats, etc.)
 
 Each object in the JSON array must have EXACTLY these keys in order:
-ID, Module, Category, Title, Precondition, Steps to Reproduce, Expected Result, Actual Result, Severity, Priority, Evidence
+ID, Module, Category, Test Type, Title, Precondition, Steps to Reproduce, Expected Result, Actual Result, Severity, Priority, Evidence
 
 CRITICAL RULES:
 - ONLY output a valid JSON array of objects.
@@ -41,7 +41,7 @@ MODEL_POOL = [
     {"name": "gemma-3-27b-it",   "supports_system": False, "rpm": 30},
     {"name": "gemma-3-12b-it",   "supports_system": False, "rpm": 30},
     {"name": "gemma-3-4b-it",    "supports_system": False, "rpm": 30},
-    {"name": "gemma-3n-e2b-it",  "supports_system": False, "rpm": 30},  # Gemma 3 2B
+    {"name": "gemma-3n-e2b-it",  "supports_system": False, "rpm": 30},
     {"name": "gemma-3-1b-it",    "supports_system": False, "rpm": 30},
     # 20 RPM — Flash Lite
     {"name": "gemini-2.5-flash-lite",  "supports_system": True, "rpm": 20},
@@ -109,7 +109,7 @@ class AIEngine:
         self._init_model()
         return True
 
-    def _call_chat(self, prompt: str) -> str:
+    def _call_chat(self, prompt: str | list) -> str:
         max_retries = 3
         
         while True:
@@ -117,7 +117,10 @@ class AIEngine:
                 try:
                     cfg = self._pool[self._idx]
                     if not cfg["supports_system"]:
-                        full = f"[SYSTEM INSTRUCTIONS]\n{SYSTEM_PROMPT[:2500]}\n[/SYSTEM]\n\n{prompt}"
+                        if isinstance(prompt, list):
+                            full = [f"[SYSTEM INSTRUCTIONS]\n{SYSTEM_PROMPT[:2500]}\n[/SYSTEM]\n\n"] + prompt
+                        else:
+                            full = f"[SYSTEM INSTRUCTIONS]\n{SYSTEM_PROMPT[:2500]}\n[/SYSTEM]\n\n{prompt}"
                     else:
                         full = prompt
                     return self.chat.send_message(full).text
@@ -163,6 +166,7 @@ class AIEngine:
         page_info: dict,
         custom_instruction: str = "",
         csv_sep: str = ",",
+        screenshot_path: str = ""
     ) -> str:
         """Menghasilkan CSV berisi Test Scenario berdasarkan scan halaman (STATEFUL)."""
         headings = [h.get('text', '')[:50] for h in page_info.get("headings", [])]
@@ -198,14 +202,26 @@ class AIEngine:
             "CRITICAL RULES:\n"
             "- ONLY output a valid JSON array of objects. Do NOT include markdown formatting like ```json or ```.\n"
             "- Each object in the JSON array MUST have EXACTLY these keys:\n"
-            "  \"ID\", \"Module\", \"Category\", \"Title\", \"Precondition\", \"Steps to Reproduce\", \"Expected Result\", \"Actual Result\", \"Severity\", \"Priority\", \"Evidence\"\n"
+            "  \"ID\", \"Module\", \"Category\", \"Test Type\", \"Title\", \"Precondition\", \"Steps to Reproduce\", \"Expected Result\", \"Actual Result\", \"Severity\", \"Priority\", \"Evidence\"\n"
             "- For the 'ID' column, use an auto-prefix based on the Module name (e.g., 'LGN-001' for Login, 'REG-001' for Register) instead of just numbers.\n"
+            "- The 'Test Type' column must strictly be 'Positive' or 'Negative'.\n"
+            f"- For 'Steps to Reproduce', step 1 MUST ALWAYS be '1. Open the site {url}'. Step 2 and beyond are the actual interactions.\n"
+            "- NEVER use the word 'Enter' when describing typing actions (e.g., 'Enter username'). ALWAYS use the word 'Input' instead (e.g., 'Input username').\n"
             "- 'Actual Result' and 'Evidence' should be left empty strings \"\" since this is planning phase.\n"
         )
         if self._chat_turns >= 6:
             self.reset_chat()
 
-        raw = self._call_chat(prompt)
+        content_parts = [prompt]
+        if screenshot_path and os.path.exists(screenshot_path):
+            try:
+                from PIL import Image
+                img = Image.open(screenshot_path)
+                content_parts.insert(0, img)
+            except Exception as e:
+                pass
+
+        raw = self._call_chat(content_parts)
         self._chat_turns += 1
         
         # Clean specific markdown fallbacks if AI disobeys
