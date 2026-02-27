@@ -1,0 +1,25 @@
+# Environments
+.env
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Agent Output & Reports
+Result/
+hasil/
+*.csv
+*.md
+!README.md
+!instructions/
+
+# OS/IDE metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
