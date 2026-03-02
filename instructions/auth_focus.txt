@@ -1,0 +1,8 @@
+Prioritize authentication and access control behavior.
+
+Cover:
+- Login happy path
+- Invalid credentials and required-field validation
+- Session persistence and logout behavior
+- Redirect handling for protected pages
+- Any OTP, SSO, or verification checkpoints

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Runs | QA Agent{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Result index</p>
+      <h1>All runs</h1>
+    </div>
+    <div class="metric-inline">
+      <span>{{ metrics.runs }} runs</span>
+      <span>{{ metrics.cases }} cases</span>
+      <span>{{ metrics.videos }} videos</span>
+    </div>
+  </div>
+  <div class="table-shell">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Run</th>
+          <th>Page Type</th>
+          <th>Cases</th>
+          <th>Passed</th>
+          <th>Failed</th>
+          <th>Videos</th>
+          <th>Confidence</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+          <tr>
+            <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.run_name) }}">{{ run.run_name }}</a></td>
+            <td>{{ run.page_type or "-" }}</td>
+            <td>{{ run.total_cases }}</td>
+            <td>{{ run.status_counts.passed or 0 }}</td>
+            <td>{{ run.status_counts.failed or 0 }}</td>
+            <td>{{ run.video_count }}</td>
+            <td><span class="confidence" title="AI confidence">{{ run.confidence_score }}</span></td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="7">No runs found.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

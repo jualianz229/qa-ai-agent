@@ -101,8 +101,19 @@ class GuardrailTests(unittest.TestCase):
                 },
                 {
                     "id": "SRH-001",
-                    "actions": [{"type": "click", "target": "Search", "role": "button"}],
-                    "assertions": [{"type": "assert_text_visible", "value": "Results"}],
+                    "actions": [{
+                        "type": "click",
+                        "target": "Search",
+                        "role": "button",
+                        "grounding_refs": [{"source_type": "button", "source_key": "Search", "source_label": "Search", "score": 10}],
+                        "grounding_confidence": 0.82,
+                    }],
+                    "assertions": [{
+                        "type": "assert_text_visible",
+                        "value": "Results",
+                        "grounding_refs": [{"source_type": "page_fact", "source_key": "results_surface", "source_label": "Results surface", "score": 8}],
+                        "grounding_confidence": 0.66,
+                    }],
                 },
             ]
         }
@@ -119,8 +130,19 @@ class GuardrailTests(unittest.TestCase):
             "plans": [
                 {
                     "id": "FRM-001",
-                    "actions": [{"type": "click", "target": "Login", "role": "button"}],
-                    "assertions": [{"type": "assert_url_contains", "value": "inventory"}],
+                    "actions": [{
+                        "type": "click",
+                        "target": "Login",
+                        "role": "button",
+                        "grounding_refs": [{"source_type": "submit_control", "source_key": "form_1", "source_label": "Login", "score": 10}],
+                        "grounding_confidence": 0.83,
+                    }],
+                    "assertions": [{
+                        "type": "assert_url_contains",
+                        "value": "inventory",
+                        "grounding_refs": [{"source_type": "page_fact", "source_key": "navigation_surface", "source_label": "Navigation or route change surface", "score": 8}],
+                        "grounding_confidence": 0.67,
+                    }],
                 }
             ]
         }

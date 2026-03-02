@@ -78,6 +78,49 @@ class ActionEngine:
     def execute(self, action):
         action_type = action.get("type")
         self.last_debug = {{"stage": "action", "action": action}}
+        if action_type in {{"fill", "select", "upload", "click", "dismiss", "hover", "scroll", "wait_for_text"}}:
+            return self._execute_with_self_healing(action)
+        if action_type == "checkpoint":
+            raise CheckpointRequiredError(action)
+        elif action_type == "inspect":
+            return
+
+    def _execute_with_self_healing(self, action):
+        last_error = None
+        for attempt_no, candidate in enumerate(self._action_variants(action), start=1):
+            try:
+                self.last_debug = {{
+                    "stage": "action",
+                    "action": candidate,
+                    "attempt_no": attempt_no,
+                    "self_healing": attempt_no > 1,
+                    "original_action": action,
+                }}
+                self._execute_once(candidate)
+                if attempt_no > 1:
+                    self.last_debug = {{
+                        **self.last_debug,
+                        "self_healed": True,
+                        "healed_target": candidate.get("target", ""),
+                        "healed_role": candidate.get("role", ""),
+                    }}
+                return
+            except ActionResolutionError as exc:
+                last_error = exc
+                self.last_debug = {{
+                    **exc.debug,
+                    "attempt_no": attempt_no,
+                    "self_healing": attempt_no > 1,
+                    "original_action": action,
+                }}
+                continue
+        if action.get("type") == "dismiss" and last_error:
+            return
+        if last_error:
+            raise last_error
+
+    def _execute_once(self, action):
+        action_type = action.get("type")
         if action_type == "fill":
             field = self._resolve_field(action)
             field.click()
@@ -88,23 +131,59 @@ class ActionEngine:
             target = self._resolve_upload_target(action)
             target.set_input_files(self._resolve_upload_path(action.get("value", "")))
         elif action_type == "click":
-            self._resolve_click_target(action.get("target", ""), action.get("role", "")).click()
+            self._resolve_click_target(action.get("target", ""), action.get("role", ""), action).click()
         elif action_type == "dismiss":
-            try:
-                self._resolve_click_target(action.get("target", ""), action.get("role", "")).click()
-            except ActionResolutionError:
-                return
+            self._resolve_click_target(action.get("target", ""), action.get("role", ""), action).click()
         elif action_type == "hover":
-            self._resolve_click_target(action.get("target", ""), action.get("role", "")).hover()
+            self._resolve_click_target(action.get("target", ""), action.get("role", ""), action).hover()
         elif action_type == "scroll":
             self._scroll_target(action)
         elif action_type == "wait_for_text":
             target = action.get("value", "") or action.get("target", "")
             self.page.get_by_text(target, exact=False).first.wait_for(state="visible", timeout=8000)
-        elif action_type == "checkpoint":
-            raise CheckpointRequiredError(action)
-        elif action_type == "inspect":
-            return
+
+    def _action_variants(self, action):
+        base = dict(action)
+        candidates = []
+        raw_selectors = list(base.get("selector_candidates", [])[:16])
+        memory_selectors = list(self.selector_memory.get("successful_selectors", [])[:8])
+        selector_variants = [
+            self._merge_unique(memory_selectors, raw_selectors),
+            self._merge_unique(raw_selectors, memory_selectors),
+            raw_selectors,
+            [],
+        ]
+        target_variants = [base.get("target", "")]
+        target_variants.extend(self._field_text_candidates(base))
+        if base.get("type") in {{"click", "dismiss", "hover"}}:
+            target_variants.extend(self._interaction_text_candidates(base))
+        role_variants = [base.get("role", "")]
+        if base.get("type") in {{"click", "dismiss", "hover"}} and not base.get("role"):
+            role_variants.extend(["button", "link", "tab", "menu", ""])
+
+        seen = set()
+        for target in target_variants:
+            for role in role_variants:
+                for selectors in selector_variants:
+                    variant = dict(base)
+                    if target:
+                        variant["target"] = target
+                    if role:
+                        variant["role"] = role
+                    elif "role" in variant:
+                        variant["role"] = ""
+                    variant["selector_candidates"] = selectors
+                    signature = (
+                        variant.get("type", ""),
+                        str(variant.get("target", "")),
+                        str(variant.get("role", "")),
+                        tuple(variant.get("selector_candidates", [])[:6]),
+                    )
+                    if signature in seen:
+                        continue
+                    candidates.append(variant)
+                    seen.add(signature)
+        return candidates[:18] or [base]
 
     def assert_expectation(self, assertion):
         assertion_type = assertion.get("type")
@@ -117,9 +196,9 @@ class ActionEngine:
             values = assertion.get("values", [])
             self._assert_any_text_visible(values)
         elif assertion_type == "assert_control_text":
-            expect(self._resolve_click_target(assertion.get("value", ""), "")).to_contain_text(assertion.get("value", ""))
+            expect(self._resolve_click_target(assertion.get("value", ""), "", assertion)).to_contain_text(assertion.get("value", ""))
         elif assertion_type == "assert_control_visible":
-            expect(self._resolve_click_target(assertion.get("value", ""), "")).to_be_visible()
+            expect(self._resolve_click_target(assertion.get("value", ""), "", assertion)).to_be_visible()
         elif assertion_type == "assert_title_contains":
             expect(self.page).to_have_title(re.compile(rf".*{{re.escape(assertion.get('value', ''))}}.*", re.IGNORECASE))
         elif assertion_type == "assert_url_contains":
@@ -187,10 +266,10 @@ class ActionEngine:
                 candidates.append((scope.locator('input[type="search"]'), f'{{context_name}}|input[type="search"]'))
         return self._first_match(candidates, f"field '{{field_name}}'", debug)
 
-    def _resolve_click_target(self, label, role_hint):
+    def _resolve_click_target(self, label, role_hint, action=None):
         fuzzy = self._text_regex(label)
         debug = {{"resolver": "click_target", "target": label, "role_hint": role_hint}}
-        candidates = []
+        candidates = self._selector_candidate_locators((action or {{}}).get("selector_candidates", []))
         for context_name, scope in self._iter_contexts():
             if role_hint == "link":
                 candidates.extend([
@@ -277,6 +356,11 @@ class ActionEngine:
                 if candidate.count():
                     selector_hint = description.split("|", 1)[1] if "|" in description else description
                     self.selector_memory["last_selector"] = selector_hint
+                    history = self.selector_memory.setdefault("successful_selectors", [])
+                    if selector_hint in history:
+                        history.remove(selector_hint)
+                    history.insert(0, selector_hint)
+                    self.selector_memory["successful_selectors"] = history[:12]
                     self.last_debug = {{
                         **debug,
                         "resolved_with": description,
@@ -315,6 +399,22 @@ class ActionEngine:
                 seen.add(text.lower())
         return deduped[:12]
 
+    def _interaction_text_candidates(self, action):
+        values = [
+            action.get("target", ""),
+            action.get("component_type", "").replace("_", " "),
+            action.get("component_key", "").replace("_", " "),
+        ]
+        values.extend(action.get("aliases", []))
+        deduped = []
+        seen = set()
+        for value in values:
+            text = re.sub(r"\\s+", " ", str(value or "")).strip()
+            if text and text.lower() not in seen:
+                deduped.append(text)
+                seen.add(text.lower())
+        return deduped[:10]
+
     def _selector_candidate_locators(self, selectors):
         locators = []
         prioritized = list(selectors[:20])
@@ -328,6 +428,17 @@ class ActionEngine:
                 except Exception:
                     continue
         return locators
+
+    def _merge_unique(self, primary, secondary):
+        merged = []
+        seen = set()
+        for bucket in (primary or [], secondary or []):
+            for item in bucket:
+                text = str(item or "").strip()
+                if text and text not in seen:
+                    merged.append(text)
+                    seen.add(text)
+        return merged
 
     def _tokens(self, value):
         base = value.strip().lower()

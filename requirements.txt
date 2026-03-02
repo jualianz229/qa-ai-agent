@@ -5,3 +5,4 @@ google-genai
 python-dotenv
 playwright
 Pillow
+Flask

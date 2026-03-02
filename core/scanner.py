@@ -130,6 +130,15 @@ class Scanner:
         runtime_info = self._collect_runtime_signals(page)
         soup = BeautifulSoup(page.content(), "html.parser")
         self._extract_page_info(soup, info, runtime_info)
+        discovery = self._discover_stateful_interactions(page)
+        info["discovered_states"] = discovery.get("states", [])
+        info["interaction_probes"] = discovery.get("probes", [])
+        info["ui_components"] = self._merge_component_lists(
+            info.get("ui_components", []),
+            discovery.get("ui_components", []),
+        )
+        info["runtime_signals"]["stateful_probe_count"] = len(info["discovered_states"])
+        info["page_fingerprint"]["discovered_state_count"] = len(info["discovered_states"])
 
         page.close()
         info["apis"] = list(dict.fromkeys(info["apis"]))[:10]
@@ -156,6 +165,8 @@ class Scanner:
             "metadata": {},
             "page_fingerprint": {},
             "runtime_signals": {},
+            "discovered_states": [],
+            "interaction_probes": [],
             "crawled_pages": [],
             "crawl_selection": [],
             "site_profile": {},
@@ -525,7 +536,8 @@ class Scanner:
 
         for key in [
             "headings", "texts", "buttons", "links", "forms", "standalone_controls",
-            "images", "apis", "sections", "tables", "lists", "ui_components", "embedded_contexts"
+            "images", "apis", "sections", "tables", "lists", "ui_components", "embedded_contexts",
+            "discovered_states", "interaction_probes"
         ]:
             combined = list(root_info.get(key, []))
             for page in crawled_pages:
@@ -564,6 +576,7 @@ class Scanner:
         count_keys = [
             "button_count", "link_count", "form_count", "standalone_control_count", "section_count", "table_count",
             "iframe_count", "shadow_host_count", "xhr_count", "fetch_count", "graphql_request_count", "websocket_count",
+            "discovered_state_count",
         ]
         combined = {}
         for key in boolean_keys:
@@ -939,6 +952,119 @@ class Scanner:
                     merged.append(component)
                     seen.add(key)
         return merged[:60]
+
+    def _discover_stateful_interactions(self, page) -> dict:
+        try:
+            payload = page.evaluate(
+                """
+                async () => {
+                    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+                    const textOf = (el) => (el?.innerText || el?.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+                    const attrText = (el) => [el?.getAttribute?.('aria-label'), el?.getAttribute?.('title'), el?.getAttribute?.('name'), el?.getAttribute?.('id')].filter(Boolean).join(' ').slice(0, 120);
+                    const pickLabel = (el) => textOf(el) || attrText(el);
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+                    };
+                    const safeAnchor = (el) => {
+                        if (!el || el.tagName !== 'A') return true;
+                        const href = (el.getAttribute('href') || '').trim();
+                        return !href || href.startsWith('#') || href.startsWith('javascript:');
+                    };
+                    const safeButton = (el) => {
+                        if (!el) return false;
+                        const type = (el.getAttribute('type') || '').toLowerCase();
+                        return type !== 'submit' && type !== 'reset';
+                    };
+                    const captureState = () => ({
+                        url: location.href,
+                        activeTabs: Array.from(document.querySelectorAll('[role="tab"][aria-selected="true"], [role="tab"].active')).map((el) => pickLabel(el)).slice(0, 4),
+                        openDetails: document.querySelectorAll('details[open]').length,
+                        dialogs: Array.from(document.querySelectorAll('[role="dialog"], dialog, .modal, [aria-modal="true"]')).filter(isVisible).length,
+                        drawers: Array.from(document.querySelectorAll('.drawer, .offcanvas, [data-drawer], [class*="drawer" i], [class*="offcanvas" i]')).filter(isVisible).length,
+                        expanded: document.querySelectorAll('[aria-expanded="true"]').length,
+                    });
+
+                    const probes = [];
+                    const states = [];
+                    const components = [];
+                    const seenStateIds = new Set();
+
+                    const probeConfigs = [
+                        { type: 'tabs', selector: '[role="tab"]', limit: 2 },
+                        { type: 'accordion', selector: 'summary, [aria-expanded]', limit: 2 },
+                        { type: 'drawer', selector: '[data-drawer-toggle], [aria-controls], .drawer-toggle, .offcanvas-toggle', limit: 2 },
+                        { type: 'modal', selector: '[aria-haspopup="dialog"], [data-modal-open], [data-open-modal]', limit: 2 },
+                        { type: 'consent_banner', selector: '[id*="cookie" i] button, [class*="cookie" i] button, [data-testid*="cookie" i] button', limit: 1 },
+                    ];
+
+                    for (const config of probeConfigs) {
+                        const nodes = Array.from(document.querySelectorAll(config.selector))
+                            .filter((el) => isVisible(el))
+                            .filter((el) => safeAnchor(el))
+                            .filter((el) => el.tagName === 'A' || safeButton(el) || el.tagName === 'SUMMARY' || el.getAttribute('role') === 'tab')
+                            .slice(0, config.limit);
+                        for (const node of nodes) {
+                            const label = pickLabel(node);
+                            if (!label) continue;
+                            const before = captureState();
+                            const beforeExpanded = node.getAttribute('aria-expanded');
+                            try {
+                                node.click();
+                                await sleep(250);
+                            } catch (error) {
+                                probes.push({ type: config.type, label, changed: false, error: String(error).slice(0, 120) });
+                                continue;
+                            }
+                            const after = captureState();
+                            const afterExpanded = node.getAttribute('aria-expanded');
+                            const changed = JSON.stringify(before) !== JSON.stringify(after) || beforeExpanded !== afterExpanded;
+                            probes.push({
+                                type: config.type,
+                                label,
+                                changed,
+                                before,
+                                after,
+                            });
+                            if (changed) {
+                                const stateId = `${config.type}_${label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`.slice(0, 60);
+                                if (stateId && !seenStateIds.has(stateId)) {
+                                    states.push({
+                                        state_id: stateId,
+                                        label: `After ${config.type} interaction: ${label}`.slice(0, 180),
+                                        trigger_action: 'click',
+                                        trigger_label: label,
+                                        source_type: config.type,
+                                        before,
+                                        after,
+                                    });
+                                    seenStateIds.add(stateId);
+                                }
+                                components.push({ type: config.type, label });
+                            }
+                            if (config.type !== 'consent_banner') {
+                                try {
+                                    node.click();
+                                    await sleep(120);
+                                } catch (error) {}
+                            }
+                        }
+                    }
+
+                    return {
+                        states: states.slice(0, 12),
+                        probes: probes.slice(0, 12),
+                        ui_components: components.slice(0, 12),
+                    };
+                }
+                """
+            )
+        except Exception as exc:
+            console.print(f"[yellow]  Gagal melakukan state discovery: {exc}[/yellow]")
+            return {"states": [], "probes": [], "ui_components": []}
+        return payload or {"states": [], "probes": [], "ui_components": []}
 
     def _collect_runtime_signals(self, page) -> dict:
         try:

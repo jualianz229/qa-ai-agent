@@ -234,6 +234,9 @@ def validate_execution_plan(execution_plan: dict, page_model: dict | None, page_
             if action_type not in allowed_action_types:
                 action_errors.append(f"unsupported action type '{action_type}'")
                 continue
+            grounding_issue = _validate_grounding(action, kind="action")
+            if grounding_issue:
+                action_errors.append(grounding_issue)
             if action_type in {"fill", "select"} and not facts.get("form", False) and not facts.get("search", False) and not facts.get("filter", False):
                 action_errors.append(f"action '{action_type}' requires field-like controls that were not detected")
             if action_type == "select" and not facts.get("filter", False) and not facts.get("form", False):
@@ -250,6 +253,9 @@ def validate_execution_plan(execution_plan: dict, page_model: dict | None, page_
             assertion_type = str(assertion.get("type", "")).strip().lower()
             if assertion_type not in allowed_action_types:
                 assertion_errors.append(f"unsupported assertion type '{assertion_type}'")
+            grounding_issue = _validate_grounding(assertion, kind="assertion")
+            if grounding_issue:
+                assertion_errors.append(grounding_issue)
             if (
                 assertion_type == "assert_url_contains"
                 and not facts.get("navigation", False)
@@ -422,3 +428,34 @@ def _coerce_confidence(value: object) -> float:
         return round(max(0.0, min(1.0, float(value))), 2)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _validate_grounding(item: dict, kind: str) -> str:
+    item_type = str(item.get("type", "")).strip().lower()
+    if item_type in {"open_url", "inspect"}:
+        return ""
+    refs = item.get("grounding_refs", []) or []
+    if not refs:
+        return f"{kind} '{item_type}' is not grounded to any scanned field/component"
+    confidence = float(item.get("grounding_confidence", 0.0) or 0.0)
+    if confidence < 0.35:
+        return f"{kind} '{item_type}' has weak grounding confidence"
+    if item_type in {"fill", "select", "upload"} and not _has_grounding_ref(refs, {"field", "submit_control"}):
+        return f"{kind} '{item_type}' is missing field grounding"
+    if item_type in {"click", "hover", "dismiss", "wait_for_text", "scroll"} and not _has_grounding_ref(
+        refs, {"component", "submit_control", "heading", "button", "link", "field", "page"}
+    ):
+        return f"{kind} '{item_type}' is missing interaction grounding"
+    if item_type.startswith("assert_") and not _has_grounding_ref(
+        refs, {"component", "heading", "button", "link", "field", "page_identity", "page_fact", "state"}
+    ):
+        return f"{kind} '{item_type}' is missing assertion grounding"
+    return ""
+
+
+def _has_grounding_ref(refs: list[dict], source_types: set[str]) -> bool:
+    for ref in refs:
+        source_type = str(ref.get("source_type", "")).strip().lower()
+        if source_type in source_types:
+            return True
+    return False

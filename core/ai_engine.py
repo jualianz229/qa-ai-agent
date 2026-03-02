@@ -4,7 +4,9 @@ import json
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from core.confidence import compute_composite_confidence
 from core.guardrails import build_allowed_vocabulary, validate_page_scope, validate_test_scenarios
+from core.site_profiles import get_failure_memory, get_ranked_selector_candidates
 
 load_dotenv()
 
@@ -187,63 +189,27 @@ class AIEngine:
     ) -> str:
         """Menghasilkan CSV berisi Test Scenario berdasarkan scan halaman (STATEFUL)."""
         self.last_scenario_validation = {}
-        headings = [h.get('text', '')[:50] for h in page_info.get("headings", []) if isinstance(h, dict)]
-        texts = [str(t)[:50] for t in page_info.get("texts", [])]
-        buttons = page_info.get("buttons", [])
-        links = [l.get('text', '')[:50] for l in page_info.get("links", [])]
-        forms = page_info.get("forms", [])
-        apis = page_info.get("apis", [])
-        sections = page_info.get("sections", [])
-        tables = page_info.get("tables", [])
-        lists = page_info.get("lists", [])
-        navigation = page_info.get("navigation", [])
-        metadata = page_info.get("metadata", {})
-        fingerprint = page_info.get("page_fingerprint", {})
-        crawled_pages = page_info.get("crawled_pages", [])
-
         allowed = build_allowed_vocabulary(page_model, page_scope, page_info)
         correction_notes = []
 
         for attempt in range(2):
+            context_pack = self._build_context_pack(
+                url=url,
+                website_title=website_title,
+                page_info=page_info,
+                page_model=page_model,
+                page_scope=page_scope,
+                custom_instruction=custom_instruction,
+                allowed=allowed,
+            )
             prompt = (
                 f"I am building a QA Test Scope for the website '{website_title}' ({url}).\n"
-                f"PAGE ANALYSIS:\n"
-                f"- Headings: {headings[:15]}\n"
-                f"- Texts: {texts[:10]}\n"
-                f"- Buttons: {buttons[:15]}\n"
-                f"- Links: {links[:15]}\n"
-                f"- Forms: {forms[:5]}\n"
-                f"- Sections: {sections[:6]}\n"
-                f"- Tables: {tables[:4]}\n"
-                f"- Lists: {lists[:4]}\n"
-                f"- Navigation: {navigation[:4]}\n"
-                f"- Metadata: {metadata}\n"
-                f"- Page Fingerprint: {fingerprint}\n"
-                f"- Linked Pages Sample: {crawled_pages[:5]}\n"
-                f"- APIs (JS endpoints): {apis}\n"
-                f"- ALLOWED VOCABULARY / FACTS: {json.dumps(allowed, ensure_ascii=False)}\n\n"
+                "Use only the grounded structured context below.\n\n"
+                f"CONTEXT PACK JSON:\n{json.dumps(context_pack, ensure_ascii=False)}\n\n"
             )
-            if page_model:
-                prompt += f"NORMALIZED PAGE MODEL:\n{json.dumps(page_model, ensure_ascii=False)[:4000]}\n\n"
-            if page_scope:
-                prompt += (
-                    "AI PAGE SCOPE ANALYSIS:\n"
-                    f"- Page Type: {page_scope.get('page_type', '')}\n"
-                    f"- Primary Goal: {page_scope.get('primary_goal', '')}\n"
-                    f"- Key Modules: {page_scope.get('key_modules', [])}\n"
-                    f"- Critical User Flows: {page_scope.get('critical_user_flows', [])}\n"
-                    f"- Priority Areas: {page_scope.get('priority_areas', [])}\n"
-                    f"- Risks: {page_scope.get('risks', [])}\n"
-                    f"- Scope Summary: {page_scope.get('scope_summary', '')}\n\n"
-                    f"- Confidence: {page_scope.get('confidence', 0)}\n\n"
-                )
-            if custom_instruction:
-                prompt += f"USER INSTRUCTION: {custom_instruction}\n\n"
             if correction_notes:
                 prompt += "GROUNDING CORRECTIONS FROM PREVIOUS ATTEMPT:\n"
                 prompt += "\n".join(f"- {note}" for note in correction_notes[:8]) + "\n\n"
-            if page_model and page_model.get("field_catalog"):
-                prompt += f"SEMANTIC FIELD SUMMARY:\n{self._summarize_field_catalog(page_model)}\n\n"
 
             prompt += (
                 "=== YOUR TASK ===\n"
@@ -292,7 +258,16 @@ class AIEngine:
                 continue
 
             validation = validate_test_scenarios(normalized, page_model, page_scope, page_info)
-            self.last_scenario_validation = validation
+            self.last_scenario_validation = {
+                **validation,
+                "composite_confidence": compute_composite_confidence(
+                    page_scope=page_scope,
+                    page_info=page_info,
+                    page_model=page_model,
+                    scope_validation=self.last_scope_validation,
+                    scenario_validation=validation,
+                ),
+            }
             if validation["is_valid"] or attempt == 1:
                 if validation["valid_cases"]:
                     return validation["valid_cases"]
@@ -311,52 +286,26 @@ class AIEngine:
     ) -> dict:
         """Analyze page context first, so test scenarios are derived from page scope instead of assumptions."""
         self.last_scope_validation = {}
-        headings = [h.get('text', '')[:80] for h in page_info.get("headings", []) if isinstance(h, dict)]
-        texts = [str(t)[:80] for t in page_info.get("texts", [])]
-        buttons = [str(b)[:80] for b in page_info.get("buttons", [])]
-        links = [f"{l.get('text', '')} -> {l.get('href', '')}" for l in page_info.get("links", []) if isinstance(l, dict)]
-        forms = page_info.get("forms", [])
-        apis = page_info.get("apis", [])
-        sections = page_info.get("sections", [])
-        tables = page_info.get("tables", [])
-        lists = page_info.get("lists", [])
-        navigation = page_info.get("navigation", [])
-        metadata = page_info.get("metadata", {})
-        fingerprint = page_info.get("page_fingerprint", {})
-        crawled_pages = page_info.get("crawled_pages", [])
-
         allowed = build_allowed_vocabulary(page_model, None, page_info)
         correction_notes = []
 
         for attempt in range(2):
-            prompt = (
-                f"You are analyzing a web page before creating QA scenarios.\n"
-                f"Target URL: {url}\n"
-                f"Website Title: {website_title}\n"
-                f"Detected headings: {headings[:15]}\n"
-                f"Detected texts: {texts[:12]}\n"
-                f"Detected buttons: {buttons[:15]}\n"
-                f"Detected links: {links[:15]}\n"
-                f"Detected forms: {forms[:6]}\n"
-                f"Detected sections: {sections[:8]}\n"
-                f"Detected tables: {tables[:4]}\n"
-                f"Detected lists: {lists[:4]}\n"
-                f"Detected navigation: {navigation[:4]}\n"
-                f"Detected metadata: {metadata}\n"
-                f"Detected page fingerprint: {fingerprint}\n"
-                f"Detected linked pages sample: {crawled_pages[:5]}\n"
-                f"Detected APIs: {apis[:10]}\n"
-                f"ALLOWED VOCABULARY / FACTS: {json.dumps(allowed, ensure_ascii=False)}\n\n"
+            context_pack = self._build_context_pack(
+                url=url,
+                website_title=website_title,
+                page_info=page_info,
+                page_model=page_model,
+                custom_instruction=custom_instruction,
+                allowed=allowed,
             )
-            if page_model:
-                prompt += f"NORMALIZED PAGE MODEL:\n{json.dumps(page_model, ensure_ascii=False)[:4000]}\n\n"
-            if custom_instruction:
-                prompt += f"USER INSTRUCTION: {custom_instruction}\n\n"
+            prompt = (
+                "You are analyzing a web page before creating QA scenarios.\n"
+                "Use only the grounded structured context below.\n\n"
+                f"CONTEXT PACK JSON:\n{json.dumps(context_pack, ensure_ascii=False)}\n\n"
+            )
             if correction_notes:
                 prompt += "GROUNDING CORRECTIONS FROM PREVIOUS ATTEMPT:\n"
                 prompt += "\n".join(f"- {note}" for note in correction_notes[:8]) + "\n\n"
-            if page_model and page_model.get("field_catalog"):
-                prompt += f"SEMANTIC FIELD SUMMARY:\n{self._summarize_field_catalog(page_model)}\n\n"
             prompt += (
                 "Decide what this page most likely is and what should be prioritized in QA.\n"
                 "Do not assume page type from the URL alone.\n"
@@ -384,7 +333,15 @@ class AIEngine:
                 continue
 
             validation = validate_page_scope(parsed, page_model, page_info)
-            self.last_scope_validation = validation
+            composite = compute_composite_confidence(
+                page_scope=validation["page_scope"],
+                page_info=page_info,
+                page_model=page_model,
+                scope_validation=validation,
+            )
+            validation["page_scope"]["confidence"] = composite["score"]
+            validation["page_scope"]["confidence_breakdown"] = composite["breakdown"]
+            self.last_scope_validation = {**validation, "composite_confidence": composite}
             if validation["is_valid"] or attempt == 1:
                 return validation["page_scope"]
             correction_notes = validation["issues"][:8]
@@ -423,6 +380,279 @@ class AIEngine:
                 }
             )
         return json.dumps(rows, ensure_ascii=False)
+
+    def _build_context_pack(
+        self,
+        url: str,
+        website_title: str,
+        page_info: dict,
+        page_model: dict | None = None,
+        page_scope: dict | None = None,
+        custom_instruction: str = "",
+        allowed: dict | None = None,
+    ) -> dict:
+        page_model = page_model or {}
+        page_scope = page_scope or {}
+        allowed = allowed or {}
+        site_profile = page_model.get("site_profile", {}) if page_model else {}
+        heuristic_scope = page_model.get("heuristic_scope", {})
+        priority_terms = self._priority_terms(page_model, page_scope)
+        prioritized_components = self._prioritize_components(page_model.get("component_catalog", []), priority_terms)
+        prioritized_flows = self._prioritize_flows(page_model.get("possible_flows", []), priority_terms)
+        return {
+            "context_pack_version": 3,
+            "page_identity": {
+                "website_title": website_title,
+                "target_url": url,
+                "page_title": page_info.get("title", ""),
+                "metadata": page_info.get("metadata", {}),
+            },
+            "page_facts": allowed.get("page_facts", {}),
+            "fingerprint": page_info.get("page_fingerprint", {}),
+            "headings": self._prioritize_text_items(
+                [h.get("text", "")[:120] for h in page_info.get("headings", []) if isinstance(h, dict)],
+                priority_terms,
+                limit=12,
+            ),
+            "texts": self._prioritize_text_items(page_info.get("texts", []), priority_terms, limit=10, max_len=140),
+            "buttons": self._prioritize_text_items(page_info.get("buttons", []), priority_terms, limit=12, max_len=100),
+            "links": [
+                {"text": link.get("text", "")[:80], "href": link.get("href", "")[:140]}
+                for link in self._prioritize_links(page_info.get("links", []), priority_terms, limit=12)
+                if isinstance(link, dict)
+            ],
+            "forms": self._summarize_forms(page_model, page_info),
+            "components": prioritized_components,
+            "possible_flows": prioritized_flows,
+            "heuristic_scope": heuristic_scope,
+            "discovered_states": page_info.get("discovered_states", [])[:8],
+            "linked_pages": [
+                {
+                    "url": page.get("url", ""),
+                    "title": page.get("title", ""),
+                    "headings": [heading.get("text", "") for heading in page.get("headings", [])[:3]],
+                    "fingerprint": page.get("fingerprint", {}) if isinstance(page.get("fingerprint", {}), dict) else {},
+                }
+                for page in page_info.get("crawled_pages", [])[:5]
+            ],
+            "allowed_vocabulary": {
+                "component_types": allowed.get("component_types", []),
+                "field_aliases": allowed.get("field_aliases", [])[:20],
+                "module_labels": allowed.get("module_labels", []),
+                "flow_names": allowed.get("flow_names", []),
+                "action_types": allowed.get("action_types", []),
+            },
+            "page_scope": {
+                "page_type": page_scope.get("page_type", ""),
+                "primary_goal": page_scope.get("primary_goal", ""),
+                "key_modules": page_scope.get("key_modules", []),
+                "critical_user_flows": page_scope.get("critical_user_flows", []),
+                "priority_areas": page_scope.get("priority_areas", []),
+                "risks": page_scope.get("risks", []),
+                "confidence": page_scope.get("confidence", 0),
+            },
+            "knowledge_bank": self._summarize_relevant_knowledge(page_model),
+            "human_feedback": site_profile.get("human_feedback", {}),
+            "context_budget": {
+                "priority_terms": priority_terms[:12],
+                "component_count": len(prioritized_components),
+                "flow_count": len(prioritized_flows),
+            },
+            "user_instruction": custom_instruction.strip(),
+        }
+
+    def _summarize_forms(self, page_model: dict, page_info: dict) -> list[dict]:
+        if page_model.get("form_catalog"):
+            forms = []
+            for form in page_model.get("form_catalog", [])[:6]:
+                forms.append(
+                    {
+                        "form_key": form.get("form_key", ""),
+                        "submit_texts": form.get("submit_texts", [])[:4],
+                        "context_text": str(form.get("context_text", ""))[:160],
+                        "fields": [
+                            {
+                                "field_key": field.get("field_key", ""),
+                                "semantic_type": field.get("semantic_type", ""),
+                                "semantic_label": field.get("semantic_label", ""),
+                                "required": field.get("required", False),
+                                "widget": field.get("widget", ""),
+                            }
+                            for field in form.get("fields", [])[:10]
+                        ],
+                    }
+                )
+            return forms
+        return page_info.get("forms", [])[:4]
+
+    def _summarize_components(self, page_model: dict) -> list[dict]:
+        rows = []
+        for component in page_model.get("component_catalog", [])[:16]:
+            rows.append(
+                {
+                    "component_key": component.get("component_key", ""),
+                    "type": component.get("type", ""),
+                    "label": component.get("label", ""),
+                    "aliases": component.get("aliases", [])[:6],
+                }
+            )
+        return rows
+
+    def _prioritize_components(self, components: list[dict], priority_terms: list[str], limit: int = 12) -> list[dict]:
+        lowered_terms = [term.lower() for term in priority_terms if term]
+        scored = []
+        for index, component in enumerate(components[:24]):
+            haystack = " ".join(
+                [
+                    str(component.get("component_key", "")),
+                    str(component.get("type", "")),
+                    str(component.get("label", "")),
+                    " ".join(str(item) for item in component.get("aliases", [])[:6]),
+                ]
+            ).lower()
+            score = sum(1 for term in lowered_terms if term in haystack)
+            scored.append((score, index, component))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        rows = []
+        for _, _, component in scored[:limit]:
+            rows.append(
+                {
+                    "component_key": component.get("component_key", ""),
+                    "type": component.get("type", ""),
+                    "label": component.get("label", ""),
+                    "aliases": component.get("aliases", [])[:6],
+                }
+            )
+        return rows
+
+    def _prioritize_flows(self, flows: list[dict], priority_terms: list[str], limit: int = 8) -> list[dict]:
+        lowered_terms = [term.lower() for term in priority_terms if term]
+        scored = []
+        for index, flow in enumerate(flows[:20]):
+            haystack = " ".join(
+                [
+                    str(flow.get("name", "")),
+                    str(flow.get("type", "")),
+                    str(flow.get("summary", "")),
+                    " ".join(str(item) for item in flow.get("triggers", [])[:4]),
+                ]
+            ).lower()
+            score = sum(1 for term in lowered_terms if term in haystack)
+            scored.append((score, index, flow))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        return [item[2] for item in scored[:limit]]
+
+    def _prioritize_text_items(
+        self,
+        values: list[object],
+        priority_terms: list[str],
+        limit: int,
+        max_len: int = 120,
+    ) -> list[str]:
+        lowered_terms = [term.lower() for term in priority_terms if term]
+        rows = []
+        for index, value in enumerate(values[:40]):
+            text = str(value or "").strip()
+            if not text:
+                continue
+            normalized = text[:max_len]
+            haystack = normalized.lower()
+            score = sum(1 for term in lowered_terms if term in haystack)
+            rows.append((score, index, normalized))
+        rows.sort(key=lambda item: (-item[0], item[1]))
+        return [item[2] for item in rows[:limit]]
+
+    def _prioritize_links(self, links: list[dict], priority_terms: list[str], limit: int = 12) -> list[dict]:
+        lowered_terms = [term.lower() for term in priority_terms if term]
+        scored = []
+        for index, link in enumerate(links[:32]):
+            if not isinstance(link, dict):
+                continue
+            haystack = f"{str(link.get('text', ''))} {str(link.get('href', ''))}".lower()
+            score = sum(1 for term in lowered_terms if term in haystack)
+            scored.append((score, index, link))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        return [item[2] for item in scored[:limit]]
+
+    def _priority_terms(self, page_model: dict, page_scope: dict) -> list[str]:
+        heuristic_scope = page_model.get("heuristic_scope", {}) if page_model else {}
+        values = [
+            heuristic_scope.get("likely_page_type", ""),
+            page_scope.get("page_type", ""),
+            *heuristic_scope.get("priority_modules", [])[:8],
+            *heuristic_scope.get("recommended_flows", [])[:8],
+            *page_scope.get("key_modules", [])[:8],
+            *page_scope.get("critical_user_flows", [])[:8],
+        ]
+        terms = []
+        seen = set()
+        for value in values:
+            text = " ".join(str(value or "").strip().split())
+            if text and text.lower() not in seen:
+                terms.append(text)
+                seen.add(text.lower())
+        return terms
+
+    def _summarize_relevant_knowledge(self, page_model: dict) -> dict:
+        site_profile = page_model.get("site_profile", {}) if page_model else {}
+        learning = site_profile.get("learning", {})
+        semantic_patterns = learning.get("semantic_patterns", {})
+
+        relevant_field_keys = []
+        for field in page_model.get("field_catalog", [])[:16]:
+            for value in (
+                field.get("field_key", ""),
+                field.get("semantic_type", ""),
+                field.get("semantic_label", ""),
+            ):
+                normalized = self._normalize_learning_key(value)
+                if normalized and normalized not in relevant_field_keys:
+                    relevant_field_keys.append(normalized)
+
+        relevant_action_keys = []
+        for component in page_model.get("component_catalog", [])[:16]:
+            for value in (component.get("component_key", ""), component.get("type", ""), component.get("label", "")):
+                normalized = self._normalize_learning_key(value)
+                if normalized and normalized not in relevant_action_keys:
+                    relevant_action_keys.append(normalized)
+
+        return {
+            "field_selector_hints": {
+                key: get_ranked_selector_candidates(learning, "field_selectors", key, limit=4)
+                for key in relevant_field_keys[:12]
+                if get_ranked_selector_candidates(learning, "field_selectors", key, limit=1)
+            },
+            "action_selector_hints": {
+                key: get_ranked_selector_candidates(learning, "action_selectors", key, limit=4)
+                for key in relevant_action_keys[:12]
+                if get_ranked_selector_candidates(learning, "action_selectors", key, limit=1)
+            },
+            "semantic_patterns": {
+                key: {
+                    "hits": semantic_patterns.get(key, {}).get("hits", 0),
+                    "score": semantic_patterns.get(key, {}).get("score", 0),
+                    "selectors": semantic_patterns.get(key, {}).get("selectors", [])[:4],
+                }
+                for key in relevant_field_keys[:12]
+                if semantic_patterns.get(key)
+            },
+            "anti_patterns": {
+                key: [
+                    {
+                        "selector": item.get("selector", ""),
+                        "failures": item.get("failures", 0),
+                    }
+                    for item in get_failure_memory(learning, "field_selectors", key, limit=3)
+                ]
+                for key in relevant_field_keys[:8]
+                if get_failure_memory(learning, "field_selectors", key, limit=1)
+            },
+            "summary": site_profile.get("knowledge_bank", {}),
+        }
+
+    def _normalize_learning_key(self, value: object) -> str:
+        text = "".join(ch.lower() if ch.isalnum() else "_" for ch in str(value or ""))
+        return "_".join(part for part in text.split("_") if part)
 
     def _infer_automation_level(self, item: dict) -> str:
         text = "\n".join(

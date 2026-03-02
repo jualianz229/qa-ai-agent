@@ -1,0 +1,518 @@
+{% extends "base.html" %}
+{% block title %}Dashboard | QA Agent{% endblock %}
+{% block content %}
+<section class="hero hero-compact">
+  <div class="hero-copy">
+    <p class="eyebrow">Dashboard</p>
+    <h1>QA Agent local workspace</h1>
+    <p class="hero-text">
+      Compose a run, reuse saved `.txt` instruction templates, preview the selected brief, then launch the existing scan and planning pipeline from one page.
+    </p>
+  </div>
+  <div class="metric-grid">
+    <article class="metric-card">
+      <span>Total runs</span>
+      <strong>{{ metrics.runs }}</strong>
+    </article>
+    <article class="metric-card">
+      <span>Total cases</span>
+      <strong>{{ metrics.cases }}</strong>
+    </article>
+    <article class="metric-card">
+      <span>Videos</span>
+      <strong>{{ metrics.videos }}</strong>
+    </article>
+    <article class="metric-card metric-card-info metric-card-elevated">
+      <span>Failed</span>
+      <strong>{{ metrics.failed }}</strong>
+    </article>
+  </div>
+</section>
+
+<section class="panel" id="job-composer">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Composer</p>
+      <h2>Start a run</h2>
+    </div>
+    <span class="panel-badge">Local only</span>
+  </div>
+
+  <div class="composer-layout">
+    <form id="job-form" class="form-stack">
+      <div class="input-group input-group-full">
+        <label for="job-url">Target URL</label>
+        <input id="job-url" type="text" name="url" placeholder="https://example.com" required>
+      </div>
+
+      <div class="form-grid">
+        <div class="input-group">
+          <label for="template-select">Instruction template</label>
+          <select id="template-select" name="template_name">
+            <option value="">Tidak pakai template</option>
+            {% for template in templates %}
+              <option value="{{ template.name }}">{{ template.stem }}</option>
+            {% endfor %}
+            <option value="__upload__">Import new template...</option>
+          </select>
+          <p class="field-help">Pilih template lama atau pilih `Import new template...` untuk upload file `.txt` baru.</p>
+        </div>
+
+        <div class="input-group">
+          <label for="crawl-limit">Mini crawl</label>
+          <select id="crawl-limit" name="crawl_limit">
+            <option value="1">1 page</option>
+            <option value="3" selected>3 pages</option>
+            <option value="5">5 pages</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="input-group input-group-full">
+        <label for="instruction-textarea">Additional instruction</label>
+        <textarea id="instruction-textarea" name="instruction" rows="8" placeholder="Tambahkan catatan tambahan bila perlu. Contoh: prioritaskan auth, form utama, empty states, dan broken media."></textarea>
+      </div>
+
+      <div class="form-grid">
+        <div class="input-group">
+          <label for="csv-sep">CSV separator</label>
+          <select id="csv-sep" name="csv_sep">
+            <option value=",">Comma</option>
+            <option value=";">Semicolon</option>
+          </select>
+        </div>
+
+        <div class="input-group input-card">
+          <span class="card-label">How it works</span>
+          <p>Pilih template jika perlu, isi note tambahan, lalu aktifkan executor hanya jika Anda ingin langkah hasil generate langsung dijalankan.</p>
+        </div>
+      </div>
+
+      <div class="settings-grid">
+        <div class="input-group setting-card">
+          <label for="use-auth">Use saved auth state</label>
+          <select id="use-auth" name="use_auth">
+            <option value="no" selected>Tidak</option>
+            <option value="yes">Iya</option>
+          </select>
+          <p class="field-help">Gunakan `auth/auth_state.json` bila tersedia.</p>
+        </div>
+
+        <div class="input-group setting-card">
+          <label for="adaptive-recrawl">Adaptive recrawl</label>
+          <select id="adaptive-recrawl" name="adaptive_recrawl">
+            <option value="yes" selected>Iya</option>
+            <option value="no">Tidak</option>
+          </select>
+          <p class="field-help">Perluas crawl otomatis jika confidence awal rendah.</p>
+        </div>
+
+        <div class="input-group setting-card">
+          <label for="run-executor">Run executor after planning</label>
+          <select id="run-executor" name="run_executor">
+            <option value="no" selected>Tidak</option>
+            <option value="yes">Iya</option>
+          </select>
+          <p class="field-help">Jalankan hasil planning dan simpan video evidence.</p>
+        </div>
+
+        <div class="input-group setting-card">
+          <label for="executor-headed">Headed browser</label>
+          <select id="executor-headed" name="executor_headed">
+            <option value="no" selected>Tidak</option>
+            <option value="yes">Iya</option>
+          </select>
+          <p class="field-help">Tampilkan browser saat executor berjalan.</p>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="primary-button" type="submit">Launch job</button>
+        <p id="job-form-status" class="helper-text">Pilih template dari dropdown atau upload file `.txt` baru jika perlu.</p>
+      </div>
+    </form>
+
+    <aside class="side-stack">
+      <section class="side-card">
+        <div class="side-card-head">
+          <div>
+            <p class="eyebrow">Template</p>
+            <h3>Preview</h3>
+          </div>
+          <span class="panel-badge" id="template-count">{{ templates|length }} saved</span>
+        </div>
+        <p class="helper-text" id="template-summary">Template tersimpan di folder `instructions/` dan bisa digunakan kembali kapan saja.</p>
+        <div class="preview-meta">
+          <strong id="template-title">No template selected</strong>
+          <span id="template-meta">Select from dropdown</span>
+        </div>
+        <pre id="template-preview" class="preview-code">Pilih template dari dropdown. Jika butuh template baru, pilih `Import new template...` lalu upload file `.txt`.</pre>
+      </section>
+
+      <section class="side-card hidden-panel" id="upload-panel">
+        <div class="side-card-head">
+          <div>
+            <p class="eyebrow">Import</p>
+            <h3>New template</h3>
+          </div>
+        </div>
+        <p class="helper-text">File `.txt` yang diupload akan disimpan otomatis dan langsung muncul di dropdown untuk run berikutnya.</p>
+        <div class="upload-stack">
+          <label class="upload-box" for="template-file">
+            <input type="file" id="template-file" name="template_file" accept=".txt">
+            <span class="upload-label">Choose `.txt` file</span>
+            <small id="selected-file-name">No file selected yet.</small>
+          </label>
+          <button type="button" class="ghost-button block-button" id="upload-template-button">Save template</button>
+        </div>
+      </section>
+    </aside>
+  </div>
+</section>
+
+<section class="panel panel-queue">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Live jobs</p>
+      <h2>Execution queue</h2>
+    </div>
+    <span class="panel-badge">Auto refresh</span>
+  </div>
+
+  <div class="queue-tips">
+    <article class="tip-card">
+      <strong>1. Compose</strong>
+      <p>Isi URL, pilih template, lalu tambahkan instruksi tambahan bila perlu.</p>
+    </article>
+    <article class="tip-card">
+      <strong>2. Launch</strong>
+      <p>Dashboard menjalankan agent CLI yang sama di background.</p>
+    </article>
+    <article class="tip-card">
+      <strong>3. Inspect</strong>
+      <p>Buka hasil run saat selesai untuk review CSV, JSON, dan video evidence.</p>
+    </article>
+  </div>
+
+  <div id="jobs-container" class="job-list">
+    {% if active_jobs %}
+      {% for job in active_jobs %}
+        <article class="job-card job-{{ job.status }}">
+          <header>
+            <strong>{{ job.payload.url }}</strong>
+            <span>{{ job.status }}</span>
+          </header>
+          <p class="mono">{{ " ".join(job.command or []) }}</p>
+          {% if job.payload.template_name %}
+            <p class="helper-text">Template: {{ job.payload.template_name }}</p>
+          {% endif %}
+          {% if job.run_name %}
+            <a class="inline-link" href="{{ url_for('run_detail', run_name=job.run_name) }}">Open run {{ job.run_name }}</a>
+          {% endif %}
+          <pre>{{ "\n".join(job.log_lines[-10:]) }}</pre>
+        </article>
+      {% endfor %}
+    {% else %}
+      <p class="empty-state">No active jobs yet.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Recent results</p>
+      <h2>Latest runs</h2>
+    </div>
+    <a class="inline-link" href="{{ url_for('runs_page') }}">View all runs</a>
+  </div>
+  <div class="run-grid">
+    {% for run in runs %}
+      <a class="run-card" href="{{ url_for('run_detail', run_name=run.run_name) }}">
+        <div class="run-card-top">
+          <span class="run-name">{{ run.run_name }}</span>
+          <span class="confidence" title="AI confidence">{{ run.confidence_score }}</span>
+        </div>
+        <h3>{{ run.title or run.run_name }}</h3>
+        <p>{{ run.page_type or "unknown page type" }}</p>
+        <dl class="mini-stats">
+          <div><dt>Cases</dt><dd>{{ run.total_cases }}</dd></div>
+          <div><dt>Videos</dt><dd>{{ run.video_count }}</dd></div>
+          <div><dt>Failed</dt><dd>{{ run.status_counts.failed or 0 }}</dd></div>
+          <div><dt>Checkpoint</dt><dd>{{ run.checkpoint_count }}</dd></div>
+        </dl>
+      </a>
+    {% else %}
+      <p class="empty-state">No result folders found yet.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Knowledge bank</p>
+      <h2>Global memory</h2>
+    </div>
+    <span class="panel-badge">{{ knowledge_snapshot.global.updated_at or "Not warmed yet" }}</span>
+  </div>
+  <div class="insight-grid">
+    <section class="insight-card">
+      <div class="insight-card-head">
+        <h3>Coverage</h3>
+      </div>
+      <div class="mini-stats">
+        <div><dt>Field selectors</dt><dd>{{ knowledge_snapshot.global.field_selector_count or 0 }}</dd></div>
+        <div><dt>Action selectors</dt><dd>{{ knowledge_snapshot.global.action_selector_count or 0 }}</dd></div>
+        <div><dt>Semantic patterns</dt><dd>{{ knowledge_snapshot.global.semantic_pattern_count or 0 }}</dd></div>
+        <div><dt>Failures tracked</dt><dd>{{ knowledge_snapshot.global.failure_count or 0 }}</dd></div>
+      </div>
+    </section>
+
+    <section class="insight-card">
+      <div class="insight-card-head">
+        <h3>Top selectors</h3>
+      </div>
+      <div class="insight-list">
+        {% for item in knowledge_snapshot.global.top_field_selectors[:4] %}
+          <article class="insight-item">
+            <strong>{{ item.key }}</strong>
+            <code>{{ item.selector }}</code>
+            <p class="helper-text">score {{ item.score }} • success {{ item.successes }} • fail {{ item.failures }}</p>
+          </article>
+        {% else %}
+          <p class="empty-state">Global bank belum punya selector sukses yang tersimpan.</p>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="insight-card">
+      <div class="insight-card-head">
+        <h3>Failure memory</h3>
+      </div>
+      <div class="insight-list">
+        {% for item in knowledge_snapshot.global.top_failures[:4] %}
+          <article class="insight-item">
+            <strong>{{ item.key }}</strong>
+            <code>{{ item.selector }}</code>
+            <p class="helper-text">{{ item.bucket }} • failure {{ item.failures }} • score {{ item.score }}</p>
+          </article>
+        {% else %}
+          <p class="empty-state">Belum ada selector gagal yang direkam.</p>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</section>
+
+<script id="template-bootstrap" type="application/json">{{ templates | tojson }}</script>
+<script>
+const jobForm = document.getElementById("job-form");
+const statusNode = document.getElementById("job-form-status");
+const jobsContainer = document.getElementById("jobs-container");
+const templateSelect = document.getElementById("template-select");
+const uploadTemplateButton = document.getElementById("upload-template-button");
+const templateFileInput = document.getElementById("template-file");
+const templateTitle = document.getElementById("template-title");
+const templateMeta = document.getElementById("template-meta");
+const templateSummary = document.getElementById("template-summary");
+const templatePreview = document.getElementById("template-preview");
+const selectedFileName = document.getElementById("selected-file-name");
+const templateCount = document.getElementById("template-count");
+const uploadPanel = document.getElementById("upload-panel");
+
+let templateCache = {};
+let activeTemplate = "";
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function toggleUploadPanel(visible) {
+  uploadPanel.classList.toggle("hidden-panel", !visible);
+}
+
+function renderJobs(jobs) {
+  if (!jobs.length) {
+    jobsContainer.innerHTML = '<p class="empty-state">No active jobs yet.</p>';
+    return;
+  }
+  jobsContainer.innerHTML = jobs.map((job) => `
+    <article class="job-card job-${escapeHtml(job.status)}">
+      <header>
+        <strong>${escapeHtml(job.payload.url)}</strong>
+        <span>${escapeHtml(job.status)}</span>
+      </header>
+      <p class="mono">${escapeHtml((job.command || []).join(" "))}</p>
+      ${job.payload.template_name ? `<p class="helper-text">Template: ${escapeHtml(job.payload.template_name)}</p>` : ""}
+      ${job.run_name ? `<a class="inline-link" href="/runs/${encodeURIComponent(job.run_name)}">Open run ${escapeHtml(job.run_name)}</a>` : ""}
+      <pre>${escapeHtml((job.log_lines || []).slice(-10).join("\n"))}</pre>
+    </article>
+  `).join("");
+}
+
+function renderTemplateOptions(templates) {
+  const currentValue = activeTemplate;
+  templateSelect.innerHTML = '<option value="">Tidak pakai template</option>';
+  templates.forEach((template) => {
+    const option = document.createElement("option");
+    option.value = template.name;
+    option.textContent = template.stem;
+    templateSelect.appendChild(option);
+  });
+  const uploadOption = document.createElement("option");
+  uploadOption.value = "__upload__";
+  uploadOption.textContent = "Import new template...";
+  templateSelect.appendChild(uploadOption);
+  templateCount.textContent = `${templates.length} saved`;
+  if (templates.some((template) => template.name === currentValue) || currentValue === "__upload__") {
+    templateSelect.value = currentValue;
+  } else {
+    templateSelect.value = "";
+    activeTemplate = "";
+  }
+}
+
+function renderDefaultPreview() {
+  templateTitle.textContent = "No template selected";
+  templateMeta.textContent = "Select from dropdown";
+  templateSummary.textContent = "Template tersimpan di folder `instructions/` dan bisa digunakan kembali kapan saja.";
+  templatePreview.textContent = "Pilih template dari dropdown. Jika butuh template baru, pilih `Import new template...` lalu upload file `.txt`.";
+}
+
+function renderUploadPreview() {
+  templateTitle.textContent = "Import new template";
+  templateMeta.textContent = "Upload mode";
+  templateSummary.textContent = "Pilih file `.txt`, simpan, lalu template baru akan otomatis masuk ke dropdown dan bisa dipakai ulang.";
+  templatePreview.textContent = "Upload a new `.txt` instruction file to save it into the `instructions/` folder.";
+}
+
+function renderTemplatePreview(template) {
+  if (!template) {
+    renderDefaultPreview();
+    return;
+  }
+  templateTitle.textContent = template.stem || template.name;
+  templateMeta.textContent = `${template.is_default ? "Built-in" : "Saved"} - ${template.size} bytes`;
+  templateSummary.textContent = `Updated at ${template.updated_at}. Template ini akan digabung otomatis dengan Additional instruction saat job dijalankan.`;
+  templatePreview.textContent = template.content;
+}
+
+function bootstrapTemplates() {
+  const raw = document.getElementById("template-bootstrap").textContent || "[]";
+  try {
+    const items = JSON.parse(raw);
+    templateCache = Object.fromEntries(items.map((template) => [template.name, template]));
+    renderTemplateOptions(items);
+  } catch {
+    templateCache = {};
+  }
+}
+
+async function fetchTemplates() {
+  const response = await fetch("/api/templates");
+  const payload = await response.json();
+  const templates = payload.templates || [];
+  templateCache = Object.fromEntries(templates.map((template) => [template.name, template]));
+  renderTemplateOptions(templates);
+  if (activeTemplate && templateCache[activeTemplate]) {
+    renderTemplatePreview(templateCache[activeTemplate]);
+    toggleUploadPanel(false);
+  } else if (activeTemplate === "__upload__") {
+    renderUploadPreview();
+    toggleUploadPanel(true);
+  } else {
+    renderDefaultPreview();
+    toggleUploadPanel(false);
+  }
+}
+
+async function selectTemplate(templateName) {
+  activeTemplate = templateName || "";
+  templateSelect.value = activeTemplate;
+  if (activeTemplate === "__upload__") {
+    renderUploadPreview();
+    toggleUploadPanel(true);
+    return;
+  }
+  if (!activeTemplate) {
+    renderDefaultPreview();
+    toggleUploadPanel(false);
+    return;
+  }
+  if (!templateCache[activeTemplate] || !templateCache[activeTemplate].content) {
+    const response = await fetch(`/api/templates/${encodeURIComponent(activeTemplate)}`);
+    const payload = await response.json();
+    templateCache[activeTemplate] = payload.template;
+  }
+  renderTemplatePreview(templateCache[activeTemplate]);
+  toggleUploadPanel(false);
+}
+
+async function refreshJobs() {
+  const response = await fetch("/api/jobs");
+  const payload = await response.json();
+  renderJobs(payload.jobs || []);
+}
+
+templateSelect.addEventListener("change", async (event) => {
+  await selectTemplate(event.target.value);
+});
+
+templateFileInput.addEventListener("change", () => {
+  const file = templateFileInput.files[0];
+  selectedFileName.textContent = file ? file.name : "No file selected yet.";
+});
+
+uploadTemplateButton.addEventListener("click", async () => {
+  const file = templateFileInput.files[0];
+  if (!file) {
+    statusNode.textContent = "Choose a `.txt` file first.";
+    return;
+  }
+  const formData = new FormData();
+  formData.append("template_file", file);
+  statusNode.textContent = "Uploading template...";
+  const response = await fetch("/api/templates", { method: "POST", body: formData });
+  const payload = await response.json();
+  if (!response.ok) {
+    statusNode.textContent = payload.error || "Failed to upload template.";
+    return;
+  }
+  activeTemplate = payload.template.name;
+  templateCache[payload.template.name] = payload.template;
+  await fetchTemplates();
+  await selectTemplate(payload.template.name);
+  statusNode.textContent = `Template ${payload.template.name} saved and selected.`;
+  templateFileInput.value = "";
+  selectedFileName.textContent = "No file selected yet.";
+});
+
+jobForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  statusNode.textContent = "Starting job...";
+  const formData = new FormData(jobForm);
+  if (activeTemplate === "__upload__") {
+    formData.set("template_name", "");
+  }
+  const response = await fetch("/api/jobs", { method: "POST", body: formData });
+  const payload = await response.json();
+  if (!response.ok) {
+    statusNode.textContent = payload.error || "Failed to start job.";
+    return;
+  }
+  statusNode.textContent = `Job ${payload.job.id} started.`;
+  await refreshJobs();
+});
+
+bootstrapTemplates();
+renderDefaultPreview();
+toggleUploadPanel(false);
+setInterval(refreshJobs, 3000);
+</script>
+{% endblock %}

@@ -335,10 +335,12 @@ class PlannerTests(unittest.TestCase):
         action_targets = [action.get("target", "") for action in plan["plans"][0]["actions"]]
 
         self.assertEqual(action_types, ["fill", "fill", "click"])
-        self.assertEqual(plan["version"], 2)
+        self.assertEqual(plan["version"], 3)
         self.assertIn("Username", action_targets)
         self.assertIn("Password", action_targets)
         self.assertIn("Login", action_targets)
+        self.assertTrue(all(action.get("grounded") for action in plan["plans"][0]["actions"]))
+        self.assertGreater(plan["plans"][0]["grounding_summary"]["coverage"], 0.9)
 
     def test_build_execution_plan_supports_modern_standalone_controls(self):
         page_info = {
@@ -539,6 +541,44 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(plan_item["pre_actions"])
         self.assertTrue(plan_item["checkpoints"])
         self.assertEqual(plan_item["orchestration"]["mode"], "semi-auto")
+
+    def test_build_normalized_page_model_preserves_discovered_states(self):
+        page_info = {
+            "url": "https://example.com/catalog",
+            "title": "Catalog",
+            "metadata": {"title": "Catalog"},
+            "headings": [{"tag": "h1", "text": "Catalog"}],
+            "texts": ["Browse products"],
+            "buttons": [],
+            "links": [],
+            "forms": [],
+            "images": [],
+            "apis": [],
+            "sections": [],
+            "tables": [],
+            "lists": [],
+            "navigation": [],
+            "page_fingerprint": {"has_listing_pattern": True},
+            "discovered_states": [
+                {
+                    "state_id": "tabs_details",
+                    "label": "After tabs interaction: Details",
+                    "trigger_action": "click",
+                    "trigger_label": "Details",
+                }
+            ],
+            "interaction_probes": [{"type": "tabs", "label": "Details", "changed": True}],
+            "crawled_pages": [],
+        }
+
+        model = build_normalized_page_model(page_info)
+
+        state_ids = {state["id"] for state in model["state_graph"]["states"]}
+        flow_names = {flow["name"] for flow in model["possible_flows"]}
+
+        self.assertIn("tabs_details", state_ids)
+        self.assertIn("tabs_details", flow_names)
+        self.assertEqual(model["runtime_observer"]["stateful_probe_count"], 1)
 
 
 if __name__ == "__main__":

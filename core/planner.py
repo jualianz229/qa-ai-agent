@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.ontology import ACTION_ONTOLOGY, COMPONENT_ONTOLOGY, FIELD_ONTOLOGY
+from core.site_profiles import get_failure_memory, get_ranked_selector_candidates
 
 
 @dataclass
@@ -24,6 +25,7 @@ class PageModelBuilder:
         page_facts = self._derive_page_facts(components, fingerprint)
         runtime_observer = self._build_runtime_observer()
         session_model = self._build_session_model(page_facts, component_catalog)
+        heuristic_scope = self._build_heuristic_scope(page_facts, component_catalog, possible_flows)
         return {
             "page_identity": {
                 "url": self.page_info.get("url", ""),
@@ -49,8 +51,11 @@ class PageModelBuilder:
             "page_facts": page_facts,
             "runtime_observer": runtime_observer,
             "session_model": session_model,
+            "heuristic_scope": heuristic_scope,
             "site_profile": self.page_info.get("site_profile", {}),
             "linked_pages": self.page_info.get("crawled_pages", []),
+            "discovered_states": self.page_info.get("discovered_states", []),
+            "interaction_probes": self.page_info.get("interaction_probes", []),
         }
 
     def _build_components(self) -> list[dict]:
@@ -164,6 +169,11 @@ class PageModelBuilder:
         entities = []
         for heading in self.page_info.get("headings", [])[:8]:
             entities.append({"type": "heading", "value": heading.get("text", "")})
+        for button in self.page_info.get("buttons", [])[:12]:
+            entities.append({"type": "button", "value": button})
+        for link in self.page_info.get("links", [])[:12]:
+            if isinstance(link, dict):
+                entities.append({"type": "link", "value": link.get("text", "")})
         for table in self.page_info.get("tables", [])[:4]:
             entities.append({"type": "table_headers", "value": table})
         for form in form_catalog[:4]:
@@ -191,52 +201,82 @@ class PageModelBuilder:
         states = [{"id": "landing", "label": "Initial page load"}]
         transitions = []
         component_types = {component.get("type") for component in components}
+        seen_states = {"landing"}
 
         if "navigation" in component_types:
             states.append({"id": "navigated", "label": "After navigation click"})
             transitions.append({"from": "landing", "to": "navigated", "via": "click"})
+            seen_states.add("navigated")
         if "search" in component_types:
             states.append({"id": "searched", "label": "After search input/action"})
             transitions.append({"from": "landing", "to": "searched", "via": "fill/click"})
+            seen_states.add("searched")
         if "filter" in component_types:
             states.append({"id": "filtered", "label": "After filter/sort change"})
             transitions.append({"from": "landing", "to": "filtered", "via": "select/click"})
+            seen_states.add("filtered")
         if "pagination" in component_types:
             states.append({"id": "paginated", "label": "After pagination change"})
             transitions.append({"from": "landing", "to": "paginated", "via": "click"})
+            seen_states.add("paginated")
         if "form" in component_types:
             states.append({"id": "submitted", "label": "After form submission"})
             transitions.append({"from": "landing", "to": "submitted", "via": "fill/click"})
+            seen_states.add("submitted")
         if "consent_banner" in component_types:
             states.append({"id": "consent_dismissed", "label": "After consent banner is dismissed"})
             transitions.append({"from": "landing", "to": "consent_dismissed", "via": "dismiss"})
+            seen_states.add("consent_dismissed")
         if "otp_verification" in component_types:
             states.append({"id": "otp_verified", "label": "After OTP or verification code is submitted"})
             transitions.append({"from": "submitted", "to": "otp_verified", "via": "fill/click"})
+            seen_states.add("otp_verified")
         if "sso_login" in component_types:
             states.append({"id": "sso_redirect", "label": "After SSO provider redirect begins"})
             transitions.append({"from": "landing", "to": "sso_redirect", "via": "click"})
+            seen_states.add("sso_redirect")
         if "drawer" in component_types:
             states.append({"id": "drawer_open", "label": "After drawer is opened"})
             transitions.append({"from": "landing", "to": "drawer_open", "via": "click"})
+            seen_states.add("drawer_open")
         if "modal" in component_types:
             states.append({"id": "dialog_open", "label": "After modal/dialog is opened"})
             transitions.append({"from": "landing", "to": "dialog_open", "via": "click"})
+            seen_states.add("dialog_open")
         if "carousel" in component_types:
             states.append({"id": "slide_changed", "label": "After carousel slide change"})
             transitions.append({"from": "landing", "to": "slide_changed", "via": "click"})
+            seen_states.add("slide_changed")
         if "infinite_scroll" in component_types:
             states.append({"id": "list_extended", "label": "After more content is loaded"})
             transitions.append({"from": "landing", "to": "list_extended", "via": "scroll/click"})
+            seen_states.add("list_extended")
         if "spa_shell" in component_types:
             states.append({"id": "route_changed", "label": "After in-app route change"})
             transitions.append({"from": "landing", "to": "route_changed", "via": "click/wait"})
+            seen_states.add("route_changed")
         if "live_feed" in component_types:
             states.append({"id": "live_updated", "label": "After live data updates on the page"})
             transitions.append({"from": "landing", "to": "live_updated", "via": "wait"})
+            seen_states.add("live_updated")
         if len(states) == 1 and actions:
             states.append({"id": "inspected", "label": "After generic inspection"})
             transitions.append({"from": "landing", "to": "inspected", "via": actions[0].get("type", "inspect")})
+            seen_states.add("inspected")
+        for state in self.page_info.get("discovered_states", [])[:12]:
+            state_id = str(state.get("state_id", "")).strip()
+            if not state_id or state_id in seen_states:
+                continue
+            states.append({"id": state_id, "label": str(state.get("label", ""))[:160]})
+            transitions.append(
+                {
+                    "from": "landing",
+                    "to": state_id,
+                    "via": str(state.get("trigger_action", "click") or "click"),
+                    "trigger": str(state.get("trigger_label", ""))[:120],
+                }
+            )
+            seen_states.add(state_id)
         return {"states": states, "transitions": transitions}
 
     def _build_possible_flows(self, components: list[dict], actions: list[dict], component_catalog: list[dict]) -> list[dict]:
@@ -272,6 +312,18 @@ class PageModelBuilder:
             flows.append({"name": "start_sso_login", "steps": [action for action in actions if action.get("component_type") == "sso_login"][:2]})
         if any(component.get("type") == "live_feed" for component in component_catalog):
             flows.append({"name": "observe_live_updates", "steps": [action for action in actions if action.get("component_type") == "live_feed" or action.get("type") == "wait_for_text"][:2]})
+        for state in self.page_info.get("discovered_states", [])[:6]:
+            trigger_label = str(state.get("trigger_label", "")).strip()
+            if trigger_label:
+                flows.append(
+                    {
+                        "name": str(state.get("state_id", "discovered_state")).strip(),
+                        "steps": [
+                            {"action": "open_url", "target": self.page_info.get("url", "")},
+                            {"action": str(state.get("trigger_action", "click") or "click"), "target": trigger_label},
+                        ],
+                    }
+                )
         return flows
 
     def _derive_page_facts(self, components: list[dict], fingerprint: dict) -> dict:
@@ -310,6 +362,73 @@ class PageModelBuilder:
             "auth_checkpoint": bool(fingerprint.get("has_auth_checkpoint") or "otp_verification" in component_types or "captcha" in component_types),
         }
 
+    def _build_heuristic_scope(self, page_facts: dict, component_catalog: list[dict], possible_flows: list[dict]) -> dict:
+        likely_page_type = "generic_page"
+        if page_facts.get("auth") and page_facts.get("form"):
+            likely_page_type = "authentication_form"
+        elif page_facts.get("search") and page_facts.get("listing"):
+            likely_page_type = "search_listing"
+        elif page_facts.get("content") and not page_facts.get("listing"):
+            likely_page_type = "content_detail"
+        elif page_facts.get("table") or (page_facts.get("filter") and page_facts.get("pagination")):
+            likely_page_type = "data_listing"
+        elif page_facts.get("form"):
+            likely_page_type = "general_form"
+        elif page_facts.get("navigation") and page_facts.get("spa_shell"):
+            likely_page_type = "application_shell"
+
+        priority_modules = []
+        if page_facts.get("auth"):
+            priority_modules.extend(["authentication", "session"])
+        if page_facts.get("search"):
+            priority_modules.append("search")
+        if page_facts.get("filter"):
+            priority_modules.append("filter")
+        if page_facts.get("pagination"):
+            priority_modules.append("pagination")
+        if page_facts.get("form"):
+            priority_modules.append("form_validation")
+        if page_facts.get("table"):
+            priority_modules.append("table_results")
+        if page_facts.get("content"):
+            priority_modules.append("content_integrity")
+        if page_facts.get("upload"):
+            priority_modules.append("file_upload")
+        if page_facts.get("live_updates"):
+            priority_modules.append("live_state")
+
+        likely_risks = []
+        if page_facts.get("auth"):
+            likely_risks.extend(["login_failure", "session_state"])
+        if page_facts.get("form"):
+            likely_risks.extend(["validation_gap", "required_field_gap"])
+        if page_facts.get("search") and page_facts.get("listing"):
+            likely_risks.extend(["empty_results", "irrelevant_results"])
+        if page_facts.get("filter") or page_facts.get("pagination"):
+            likely_risks.append("state_persistence")
+        if page_facts.get("upload"):
+            likely_risks.append("upload_constraints")
+        if page_facts.get("live_updates"):
+            likely_risks.append("stale_live_state")
+        if page_facts.get("consent_banner"):
+            likely_risks.append("blocked_primary_flow")
+
+        recommended_flows = [flow.get("name", "") for flow in possible_flows[:8] if flow.get("name")]
+        interaction_density = sum(1 for component in component_catalog if component.get("type")) + len(recommended_flows)
+        confidence = 0.45
+        confidence += min(len(priority_modules), 5) * 0.08
+        confidence += 0.12 if likely_page_type != "generic_page" else 0.0
+        confidence += 0.08 if interaction_density >= 4 else 0.0
+        confidence = round(min(0.95, confidence), 2)
+
+        return {
+            "likely_page_type": likely_page_type,
+            "priority_modules": _merge_unique_list(priority_modules),
+            "likely_risks": _merge_unique_list(likely_risks),
+            "recommended_flows": recommended_flows,
+            "confidence": confidence,
+        }
+
     def _build_runtime_observer(self) -> dict:
         signals = dict(self.page_info.get("runtime_signals", {}))
         return {
@@ -322,6 +441,7 @@ class PageModelBuilder:
             "local_storage_keys": list(signals.get("local_storage_keys", []))[:10],
             "session_storage_keys": list(signals.get("session_storage_keys", []))[:10],
             "embedded_contexts": list(self.page_info.get("embedded_contexts", []))[:10],
+            "stateful_probe_count": len(self.page_info.get("discovered_states", [])),
         }
 
     def _build_session_model(self, page_facts: dict, component_catalog: list[dict]) -> dict:
@@ -432,9 +552,10 @@ class PageModelBuilder:
         base_key = semantic_type or "generic_text"
         field_counts[base_key] = field_counts.get(base_key, 0) + 1
         suffix = f"_{field_counts[base_key]}" if field_counts[base_key] > 1 else ""
-        selector_candidates = self._build_selector_candidates(field)
+        selector_candidates = self._build_selector_candidates(field, semantic_type)
         return {
             "field_key": f"{base_key}{suffix}",
+            "form_key": form_entry.get("form_key", ""),
             "semantic_type": semantic_type,
             "semantic_label": semantic_label,
             "semantic_confidence": confidence,
@@ -557,7 +678,7 @@ class PageModelBuilder:
                     seen.add(normalized.lower())
         return aliases[:20]
 
-    def _build_selector_candidates(self, field: dict) -> list[str]:
+    def _build_selector_candidates(self, field: dict, semantic_type: str) -> list[str]:
         selectors = []
         tag = field.get("tag", "") or "input"
         role = str(field.get("role", "")).strip()
@@ -596,7 +717,25 @@ class PageModelBuilder:
             ])
         if widget == "upload":
             selectors.append('input[type="file"]')
-        return list(dict.fromkeys(selectors))[:12]
+        selectors.extend(self._learned_field_selectors(field, semantic_type))
+        return list(dict.fromkeys(selectors))[:16]
+
+    def _learned_field_selectors(self, field: dict, semantic_type: str) -> list[str]:
+        learning = self.page_info.get("site_profile", {}).get("learning", {})
+        selector_map = learning.get("field_selectors", {})
+        keys = [
+            semantic_type,
+            field.get("label", ""),
+            field.get("name", ""),
+            field.get("id", ""),
+            field.get("aria_label", ""),
+        ]
+        selectors = []
+        for key in keys:
+            normalized = _normalize_learning_key(key)
+            if normalized:
+                selectors.extend(selector_map.get(normalized, []))
+        return selectors[:8]
 
     def _field_action_type(self, field: dict) -> str:
         widget = str(field.get("widget", "")).lower()
@@ -664,9 +803,10 @@ def build_execution_plan(test_cases: list[dict], page_model: dict, base_url: str
                 "expected_result": expected,
             },
         }
+        plan["grounding_summary"] = _build_grounding_summary(plan)
         plans.append(plan)
     return {
-        "version": 2,
+        "version": 3,
         "base_url": base_url,
         "page_identity": page_model.get("page_identity", {}),
         "state_graph": page_model.get("state_graph", {}),
@@ -731,7 +871,7 @@ def _derive_pre_actions(case: dict, page_model: dict, site_profile: dict | None)
                 "aliases": ["accept", "agree", "allow", "ok", "got it", "accept cookies"],
             }
         )
-    return actions
+    return [_ground_action(action, page_model) for action in actions]
 
 
 def _infer_manual_checkpoints(case: dict, page_model: dict, site_profile: dict | None) -> list[dict]:
@@ -835,7 +975,7 @@ def _extract_actions(steps: str, page_model: dict | None = None) -> list[dict]:
         flags=re.IGNORECASE,
     )
 
-    for raw_line in steps.splitlines():
+    for step_index, raw_line in enumerate(steps.splitlines(), start=1):
         line = re.sub(r"^\s*\d+\.\s*", "", str(raw_line or "")).strip()
         if not line:
             continue
@@ -843,62 +983,62 @@ def _extract_actions(steps: str, page_model: dict | None = None) -> list[dict]:
         input_match = input_pattern.match(line)
         if input_match:
             value, quoted_target, plain_target = input_match.groups()
-            action = {"type": "fill", "target": (quoted_target or plain_target or "").strip(), "value": value}
-            actions.append(_enrich_field_action(action, page_model))
+            action = {"type": "fill", "target": (quoted_target or plain_target or "").strip(), "value": value, "step_index": step_index, "step_text": line}
+            actions.append(_ground_action(_enrich_field_action(action, page_model), page_model))
             continue
 
         select_match = select_pattern.match(line)
         if select_match:
             value, quoted_target, plain_target = select_match.groups()
-            action = {"type": "select", "target": (quoted_target or plain_target or "").strip(), "value": value}
-            actions.append(_enrich_field_action(action, page_model))
+            action = {"type": "select", "target": (quoted_target or plain_target or "").strip(), "value": value, "step_index": step_index, "step_text": line}
+            actions.append(_ground_action(_enrich_field_action(action, page_model), page_model))
             continue
 
         upload_match = upload_pattern.match(line)
         if upload_match:
             value, quoted_target, plain_target = upload_match.groups()
-            action = {"type": "upload", "target": (quoted_target or plain_target or "").strip(), "value": value}
-            actions.append(_enrich_field_action(action, page_model))
+            action = {"type": "upload", "target": (quoted_target or plain_target or "").strip(), "value": value, "step_index": step_index, "step_text": line}
+            actions.append(_ground_action(_enrich_field_action(action, page_model), page_model))
             continue
 
         clear_match = clear_pattern.match(line)
         if clear_match:
             quoted_target, plain_target = clear_match.groups()
-            action = {"type": "fill", "target": (quoted_target or plain_target or "").strip(), "value": ""}
-            actions.append(_enrich_field_action(action, page_model))
+            action = {"type": "fill", "target": (quoted_target or plain_target or "").strip(), "value": "", "step_index": step_index, "step_text": line}
+            actions.append(_ground_action(_enrich_field_action(action, page_model), page_model))
             continue
 
         click_match = click_pattern.match(line)
         if click_match:
             quoted_target, plain_target, role = click_match.groups()
-            actions.append({"type": "click", "target": (quoted_target or plain_target or "").strip(), "role": (role or "").strip().lower()})
+            actions.append(_ground_action({"type": "click", "target": (quoted_target or plain_target or "").strip(), "role": (role or "").strip().lower(), "step_index": step_index, "step_text": line}, page_model))
             continue
 
         hover_match = hover_pattern.match(line)
         if hover_match:
             quoted_target, plain_target, role = hover_match.groups()
-            actions.append({"type": "hover", "target": (quoted_target or plain_target or "").strip(), "role": (role or "").strip().lower()})
+            actions.append(_ground_action({"type": "hover", "target": (quoted_target or plain_target or "").strip(), "role": (role or "").strip().lower(), "step_index": step_index, "step_text": line}, page_model))
             continue
 
         scroll_match = scroll_pattern.match(line)
         if scroll_match:
             quoted_target, plain_target = scroll_match.groups()
-            actions.append({"type": "scroll", "target": (quoted_target or plain_target or "").strip()})
+            actions.append(_ground_action({"type": "scroll", "target": (quoted_target or plain_target or "").strip(), "step_index": step_index, "step_text": line}, page_model))
             continue
 
         wait_match = wait_pattern.match(line)
         if wait_match:
             quoted_target, plain_target = wait_match.groups()
-            actions.append({"type": "wait_for_text", "target": (quoted_target or plain_target or "").strip()})
+            actions.append(_ground_action({"type": "wait_for_text", "target": (quoted_target or plain_target or "").strip(), "step_index": step_index, "step_text": line}, page_model))
             continue
 
         dismiss_match = dismiss_pattern.match(line)
         if dismiss_match:
             quoted_target, plain_target, role = dismiss_match.groups()
-            actions.append({"type": "dismiss", "target": (quoted_target or plain_target or "").strip(), "role": (role or "button").strip().lower()})
+            actions.append(_ground_action({"type": "dismiss", "target": (quoted_target or plain_target or "").strip(), "role": (role or "button").strip().lower(), "step_index": step_index, "step_text": line}, page_model))
 
     if not actions:
-        actions.append({"type": "inspect", "target": "page"})
+        actions.append(_ground_action({"type": "inspect", "target": "page", "step_index": 0, "step_text": "Inspect the page"}, page_model))
     return actions
 
 
@@ -910,31 +1050,31 @@ def _extract_assertions(expected: str, page_model: dict | None = None) -> list[d
     if "url" in expected_lower or "redirect" in expected_lower or "open" in expected_lower or "navigate" in expected_lower:
         path_match = re.search(r"/[a-zA-Z0-9\-_/?=&]+", expected)
         if path_match:
-            assertions.append({"type": "assert_url_contains", "value": path_match.group(0)})
+            assertions.append(_ground_assertion({"type": "assert_url_contains", "value": path_match.group(0), "source_text": expected}, page_model))
         else:
             redirect_match = re.search(r"redirect(?:ed)?\s+to\s+the\s+([a-z0-9 _-]+?)\s+page", expected_lower)
             if redirect_match:
-                assertions.append({"type": "assert_url_contains", "value": _slug_phrase(redirect_match.group(1))})
+                assertions.append(_ground_assertion({"type": "assert_url_contains", "value": _slug_phrase(redirect_match.group(1)), "source_text": expected}, page_model))
     if any(term in expected_lower for term in ("title", "page title")) and quoted_values:
-        assertions.append({"type": "assert_title_contains", "value": quoted_values[0]})
+        assertions.append(_ground_assertion({"type": "assert_title_contains", "value": quoted_values[0], "source_text": expected}, page_model))
     if any(term in expected_lower for term in ("not visible", "not displayed", "not shown", "should disappear", "hidden")):
         for text in quoted_values[:2]:
-            assertions.append({"type": "assert_text_not_visible", "value": text})
+            assertions.append(_ground_assertion({"type": "assert_text_not_visible", "value": text, "source_text": expected}, page_model))
     if "button" in expected_lower and any(term in expected_lower for term in ("visible", "enabled", "shown")) and quoted_values:
-        assertions.append({"type": "assert_control_visible", "value": quoted_values[0]})
+        assertions.append(_ground_assertion({"type": "assert_control_visible", "value": quoted_values[0], "source_text": expected}, page_model))
     if "link" in expected_lower and any(term in expected_lower for term in ("visible", "shown")) and quoted_values:
-        assertions.append({"type": "assert_control_visible", "value": quoted_values[0]})
+        assertions.append(_ground_assertion({"type": "assert_control_visible", "value": quoted_values[0], "source_text": expected}, page_model))
     if "display" in expected_lower or "visible" in expected_lower or "shown" in expected_lower or "message" in expected_lower:
         for text in quoted_values[:2]:
-            assertions.append({"type": "assert_text_visible", "value": text})
+            assertions.append(_ground_assertion({"type": "assert_text_visible", "value": text, "source_text": expected}, page_model))
     if "text" in expected_lower and quoted_values:
-        assertions.append({"type": "assert_control_text", "value": quoted_values[0]})
+        assertions.append(_ground_assertion({"type": "assert_control_text", "value": quoted_values[0], "source_text": expected}, page_model))
     if not assertions:
         generic_texts = _generic_assertion_texts(expected_lower, page_model)
         if generic_texts:
-            assertions.append({"type": "assert_any_text_visible", "values": generic_texts})
+            assertions.append(_ground_assertion({"type": "assert_any_text_visible", "values": generic_texts, "source_text": expected}, page_model))
     if not assertions and quoted_values:
-        assertions.append({"type": "assert_text_visible", "value": quoted_values[0]})
+        assertions.append(_ground_assertion({"type": "assert_text_visible", "value": quoted_values[0], "source_text": expected}, page_model))
     return assertions
 
 
@@ -949,7 +1089,7 @@ def _enrich_field_action(action: dict, page_model: dict | None) -> dict:
     enriched["semantic_type"] = match.get("semantic_type", "")
     enriched["semantic_label"] = match.get("semantic_label", "")
     enriched["aliases"] = match.get("aliases", [])
-    enriched["selector_candidates"] = match.get("selector_candidates", [])
+    enriched["selector_candidates"] = _merge_unique_list(match.get("selector_candidates", []), _learned_field_selectors(match, page_model))
     enriched["input_kind"] = match.get("widget", "") or match.get("type", "")
     return enriched
 
@@ -980,9 +1120,304 @@ def _match_field_reference(target: str, page_model: dict) -> dict | None:
         if semantic_label == target_text:
             score += 10
         if score > best_score:
-            best = field
+            best = {**field, "_match_score": score, "_matched_target": target}
             best_score = score
     return best if best_score >= 7 else None
+
+
+def _ground_action(action: dict, page_model: dict | None) -> dict:
+    enriched = dict(action)
+    refs = []
+    action_type = str(action.get("type", "")).strip().lower()
+    if not page_model:
+        enriched["grounding_refs"] = refs
+        enriched["grounded"] = action_type in {"open_url", "inspect"}
+        enriched["grounding_confidence"] = 1.0 if enriched["grounded"] else 0.0
+        return enriched
+
+    if action_type in {"fill", "select", "upload"}:
+        field_match = _match_field_reference(action.get("target", ""), page_model)
+        if field_match:
+            refs.append(
+                {
+                    "source_type": "field",
+                    "source_key": field_match.get("field_key", ""),
+                    "source_label": field_match.get("semantic_label") or field_match.get("label", ""),
+                    "matched_text": action.get("target", ""),
+                    "score": field_match.get("_match_score", 0),
+                    "form_key": field_match.get("form_key", ""),
+                }
+            )
+    elif action_type in {"click", "hover", "dismiss", "scroll", "wait_for_text"}:
+        refs.extend(_match_interaction_refs(action, page_model))
+
+    if action_type in {"open_url", "inspect"} and not refs:
+        refs.append({"source_type": "page", "source_key": "page_identity", "source_label": "Page identity", "matched_text": action.get("target", ""), "score": 10})
+
+    if refs:
+        enriched["grounding_refs"] = refs[:6]
+        enriched["grounded"] = True
+        enriched["grounding_confidence"] = round(min(1.0, max(ref.get("score", 0) for ref in refs) / 14), 2)
+        if action_type in {"click", "hover", "dismiss"} and not enriched.get("selector_candidates"):
+            enriched["selector_candidates"] = _learned_action_selectors(action.get("target", ""), page_model)
+    else:
+        enriched["grounding_refs"] = []
+        enriched["grounded"] = False
+        enriched["grounding_confidence"] = 0.0
+    return enriched
+
+
+def _ground_assertion(assertion: dict, page_model: dict | None) -> dict:
+    enriched = dict(assertion)
+    assertion_type = str(assertion.get("type", "")).strip().lower()
+    refs = []
+    source_text = str(assertion.get("source_text", "")).lower()
+
+    if not page_model:
+        enriched["grounding_refs"] = refs
+        enriched["grounded"] = False
+        enriched["grounding_confidence"] = 0.0
+        return enriched
+
+    value = assertion.get("value", "")
+    if assertion_type in {"assert_text_visible", "assert_text_not_visible", "assert_any_text_visible"}:
+        candidate_values = assertion.get("values", []) if assertion_type == "assert_any_text_visible" else [value]
+        for candidate in candidate_values:
+            refs.extend(_match_text_refs(candidate, page_model))
+        if not refs and candidate_values:
+            refs.extend(_match_interaction_refs({"type": "wait_for_text", "target": candidate_values[0]}, page_model))
+        if not refs:
+            refs.extend(_generic_assertion_refs(candidate_values, source_text, page_model))
+    elif assertion_type in {"assert_control_visible", "assert_control_text"}:
+        refs.extend(_match_interaction_refs({"type": "click", "target": value}, page_model))
+    elif assertion_type == "assert_title_contains":
+        title = str(page_model.get("page_identity", {}).get("title", ""))
+        if value and title:
+            refs.append(
+                {
+                    "source_type": "page_identity",
+                    "source_key": "title",
+                    "source_label": title[:120],
+                    "matched_text": value,
+                    "score": 12 if value.lower() in title.lower() else 8,
+                }
+            )
+    elif assertion_type == "assert_url_contains":
+        for state in page_model.get("state_graph", {}).get("states", []):
+            label = str(state.get("label", ""))
+            if value and value.lower().replace("_", " ") in label.lower():
+                refs.append(
+                    {
+                        "source_type": "state",
+                        "source_key": state.get("id", ""),
+                        "source_label": label,
+                        "matched_text": value,
+                        "score": 10,
+                    }
+                )
+        if not refs:
+            refs.append(
+                {
+                    "source_type": "page_fact",
+                    "source_key": "navigation_surface",
+                    "source_label": "Navigation or route change surface",
+                    "matched_text": value,
+                    "score": 8,
+                }
+            )
+
+    if refs:
+        enriched["grounding_refs"] = refs[:6]
+        enriched["grounded"] = True
+        enriched["grounding_confidence"] = round(min(1.0, max(ref.get("score", 0) for ref in refs) / 12), 2)
+    else:
+        enriched["grounding_refs"] = []
+        enriched["grounded"] = False
+        enriched["grounding_confidence"] = 0.0
+    return enriched
+
+
+def _generic_assertion_refs(values: list[str], source_text: str, page_model: dict) -> list[dict]:
+    text_blob = " ".join(str(value or "") for value in values).lower()
+    facts = page_model.get("page_facts", {})
+    refs = []
+    if any(term in text_blob or term in source_text for term in ("error", "invalid", "required")) and facts.get("form"):
+        refs.append({"source_type": "page_fact", "source_key": "form_validation", "source_label": "Form validation state", "matched_text": text_blob or source_text, "score": 8})
+    if any(term in text_blob or term in source_text for term in ("success", "saved", "submitted")) and any(
+        facts.get(key) for key in ("form", "upload", "rich_text")
+    ):
+        refs.append({"source_type": "page_fact", "source_key": "submission_feedback", "source_label": "Submission feedback surface", "matched_text": text_blob or source_text, "score": 8})
+    if any(term in text_blob or term in source_text for term in ("result", "results")) and any(
+        facts.get(key) for key in ("search", "listing", "table")
+    ):
+        refs.append({"source_type": "page_fact", "source_key": "results_surface", "source_label": "Search or results surface", "matched_text": text_blob or source_text, "score": 8})
+    if any(term in text_blob or term in source_text for term in ("modal", "dialog")):
+        refs.append({"source_type": "page_fact", "source_key": "dialog_surface", "source_label": "Modal or dialog surface", "matched_text": text_blob or source_text, "score": 7})
+    return refs[:4]
+
+
+def _match_interaction_refs(action: dict, page_model: dict) -> list[dict]:
+    target_text = re.sub(r"\s+", " ", str(action.get("target", "") or "")).strip()
+    if not target_text:
+        return []
+
+    refs = []
+    component_match = _match_component_reference(target_text, page_model)
+    if component_match:
+        refs.append(
+            {
+                "source_type": "component",
+                "source_key": component_match.get("component_key", ""),
+                "source_label": component_match.get("label", "") or component_match.get("type", ""),
+                "matched_text": target_text,
+                "score": component_match.get("_match_score", 0),
+            }
+        )
+    for form in page_model.get("form_catalog", []):
+        submit_texts = [str(text).strip() for text in form.get("submit_texts", []) if str(text).strip()]
+        for submit_text in submit_texts:
+            if _score_text_match(target_text, submit_text) >= 8:
+                refs.append(
+                    {
+                        "source_type": "submit_control",
+                        "source_key": form.get("form_key", ""),
+                        "source_label": submit_text,
+                        "matched_text": target_text,
+                        "score": _score_text_match(target_text, submit_text),
+                    }
+                )
+                break
+    refs.extend(_match_text_refs(target_text, page_model))
+    deduped = []
+    seen = set()
+    for ref in sorted(refs, key=lambda item: item.get("score", 0), reverse=True):
+        key = (ref.get("source_type", ""), ref.get("source_key", ""), ref.get("source_label", ""))
+        if key in seen:
+            continue
+        deduped.append(ref)
+        seen.add(key)
+    return deduped[:6]
+
+
+def _match_component_reference(target: str, page_model: dict) -> dict | None:
+    target_text = re.sub(r"\s+", " ", str(target or "")).strip().lower()
+    if not target_text:
+        return None
+    best = None
+    best_score = 0
+    for component in page_model.get("component_catalog", []):
+        score = 0
+        for alias in component.get("aliases", []):
+            score = max(score, _score_text_match(target_text, alias))
+        label = str(component.get("label", "")).strip().lower()
+        if label:
+            score = max(score, _score_text_match(target_text, label))
+        if score > best_score:
+            best = {**component, "_match_score": score}
+            best_score = score
+    return best if best_score >= 7 else None
+
+
+def _match_text_refs(target: str, page_model: dict) -> list[dict]:
+    target_text = re.sub(r"\s+", " ", str(target or "")).strip().lower()
+    if not target_text:
+        return []
+    refs = []
+    for entity in page_model.get("entities", []):
+        value = str(entity.get("value", "")).strip()
+        score = _score_text_match(target_text, value)
+        if score >= 7:
+            refs.append(
+                {
+                    "source_type": entity.get("type", "entity"),
+                    "source_key": str(entity.get("value", ""))[:60],
+                    "source_label": value[:120],
+                    "matched_text": target,
+                    "score": score,
+                }
+            )
+    return refs[:6]
+
+
+def _score_text_match(left: str, right: str) -> int:
+    left_text = re.sub(r"\s+", " ", str(left or "")).strip().lower()
+    right_text = re.sub(r"\s+", " ", str(right or "")).strip().lower()
+    if not left_text or not right_text:
+        return 0
+    left_compact = re.sub(r"[^a-z0-9]+", "", left_text)
+    right_compact = re.sub(r"[^a-z0-9]+", "", right_text)
+    if left_text == right_text:
+        return 12
+    if left_compact and right_compact and left_compact == right_compact:
+        return 10
+    if left_text in right_text or right_text in left_text:
+        return 8
+    if left_compact and right_compact and (left_compact in right_compact or right_compact in left_compact):
+        return 7
+    return 0
+
+
+def _merge_unique_list(*values: list[str]) -> list[str]:
+    merged = []
+    seen = set()
+    for value_list in values:
+        for value in value_list or []:
+            text = str(value or "").strip()
+            if text and text not in seen:
+                merged.append(text)
+                seen.add(text)
+    return merged
+
+
+def _normalize_learning_key(value: object) -> str:
+    text = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower())
+    return text.strip("_")
+
+
+def _learned_field_selectors(field_match: dict, page_model: dict) -> list[str]:
+    learning = page_model.get("site_profile", {}).get("learning", {})
+    keys = [
+        field_match.get("field_key", ""),
+        field_match.get("semantic_type", ""),
+        field_match.get("semantic_label", ""),
+        field_match.get("label", ""),
+        field_match.get("name", ""),
+        field_match.get("id", ""),
+    ]
+    selectors = []
+    for key in keys:
+        selectors.extend(get_ranked_selector_candidates(learning, "field_selectors", key, limit=4))
+    for key in keys[:3]:
+        for failure in get_failure_memory(learning, "field_selectors", key, limit=2):
+            selector = str(failure.get("selector", "")).strip()
+            if selector and selector in selectors:
+                selectors.remove(selector)
+    return _merge_unique_list(selectors)
+
+
+def _learned_action_selectors(target: str, page_model: dict) -> list[str]:
+    learning = page_model.get("site_profile", {}).get("learning", {})
+    selectors = get_ranked_selector_candidates(learning, "action_selectors", target, limit=5)
+    for failure in get_failure_memory(learning, "action_selectors", target, limit=2):
+        selector = str(failure.get("selector", "")).strip()
+        if selector and selector in selectors:
+            selectors.remove(selector)
+    return selectors
+
+
+def _build_grounding_summary(plan: dict) -> dict:
+    items = list(plan.get("pre_actions", [])) + list(plan.get("actions", [])) + list(plan.get("assertions", []))
+    grounded_items = [item for item in items if item.get("grounded")]
+    weak_items = [
+        item for item in grounded_items
+        if float(item.get("grounding_confidence", 0.0) or 0.0) < 0.45
+    ]
+    return {
+        "total_items": len(items),
+        "grounded_items": len(grounded_items),
+        "weak_grounding_items": len(weak_items),
+        "coverage": round((len(grounded_items) / len(items)), 2) if items else 0.0,
+    }
 
 
 def _generic_assertion_texts(expected_lower: str, page_model: dict | None) -> list[str]:

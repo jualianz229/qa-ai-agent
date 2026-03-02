@@ -1,0 +1,7 @@
+Focus on the most critical user flows first.
+
+Priorities:
+- Main navigation and top-level entry points
+- Primary CTA and key conversion path
+- Form validation and error handling
+- Broken links, empty states, and loading behavior

@@ -1,0 +1,8 @@
+Prioritize content and discovery quality.
+
+Cover:
+- Headline, metadata, and section visibility
+- Navigation to detail pages
+- Search, filter, sort, and pagination if present
+- Empty states, related content, and broken media
+- Breadcrumbs and return paths

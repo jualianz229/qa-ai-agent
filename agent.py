@@ -9,6 +9,7 @@ QA AI Agent - Page Scope Analyzer and Test Scenario Generator
 """
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -24,14 +25,15 @@ from rich.panel import Panel
 from rich.rule import Rule
 
 from core.ai_engine import AIEngine
-from core.artifacts import execution_debug_path, execution_results_path, json_artifact_path
+from core.artifacts import execution_debug_path, execution_learning_path, execution_results_path, json_artifact_path
+from core.confidence import compute_composite_confidence
 from core.executor import CodeGenerator
 from core.guardrails import validate_execution_plan
 from core.planner import build_execution_plan, build_normalized_page_model, save_json_artifact
 from core.result_analyzer import analyze_execution_results, save_execution_summary
 from core.run_context import merge_recrawl_project_info
 from core.scanner import Scanner
-from core.site_profiles import load_site_profile
+from core.site_profiles import enrich_site_profile_with_clusters, load_site_profile, merge_execution_learning
 
 load_dotenv()
 
@@ -87,6 +89,9 @@ def process_single_url(
             adaptive_recrawl=adaptive_recrawl,
         )
         page_model = build_normalized_page_model(page_info)
+        site_profile = enrich_site_profile_with_clusters(site_profile, page_model=page_model, page_scope=page_scope)
+        page_info["site_profile"] = site_profile
+        page_model["site_profile"] = site_profile
         page_model_path = save_json_artifact(
             page_model,
             json_artifact_path(
@@ -184,6 +189,17 @@ def process_single_url(
                 raise ValueError(
                     "Semua execution plan ditolak guardrail. Periksa JSON/Execution_Plan_Validation_*.json untuk detail."
                 )
+            composite_confidence = compute_composite_confidence(
+                page_scope=page_scope,
+                page_info=page_info,
+                page_model=page_model,
+                scope_validation=engine.last_scope_validation,
+                scenario_validation=engine.last_scenario_validation,
+                execution_plan_validation=execution_plan_validation,
+            )
+            page_scope["confidence"] = composite_confidence["score"]
+            page_scope["confidence_breakdown"] = composite_confidence["breakdown"]
+            runner.save_page_scope(page_scope, project_info)
             execution_plan_path = save_json_artifact(
                 execution_plan,
                 json_artifact_path(
@@ -228,10 +244,31 @@ def process_single_url(
                         summary_path = save_execution_summary(results_path, summary)
                         runner.update_csv_with_execution_results(saved_csv_path, results_path, csv_sep)
                         debug_path = execution_debug_path(project_info["run_dir"])
+                        learning_path = execution_learning_path(project_info["run_dir"])
                         console.print(f"[green][OK][/green] Ringkasan eksekusi dibuat: [dim]{summary_path}[/dim]")
                         console.print(f"[green][OK][/green] CSV diperbarui dengan hasil eksekusi: [dim]{saved_csv_path}[/dim]")
                         if debug_path.exists():
                             console.print(f"[green][OK][/green] Debug eksekusi disimpan: [dim]{debug_path}[/dim]")
+                        if learning_path.exists():
+                            learned_profile_info = merge_execution_learning(
+                                url,
+                                json.loads(learning_path.read_text(encoding="utf-8")),
+                                knowledge_context={"page_model": page_model, "page_scope": page_scope},
+                            )
+                            if learned_profile_info:
+                                console.print(
+                                    f"[green][OK][/green] Global knowledge bank diperbarui: "
+                                    f"[dim]{learned_profile_info['global_path']}[/dim]"
+                                )
+                                console.print(
+                                    f"[green][OK][/green] Domain learning diperbarui: "
+                                    f"[dim]{learned_profile_info['domain_path']}[/dim]"
+                                )
+                                if learned_profile_info.get("cluster_paths"):
+                                    console.print(
+                                        f"[green][OK][/green] Cluster learning diperbarui: "
+                                        f"[dim]{', '.join(learned_profile_info['cluster_paths'][:3])}[/dim]"
+                                    )
                 except subprocess.CalledProcessError as exc:
                     console.print(f"\n[bold red][ERR] Executor gagal dijalankan: {exc}[/bold red]")
             else:
@@ -333,9 +370,13 @@ def parse_args():
 
 
 def _load_instruction(instruction: str, instruction_file: str | None) -> str:
+    manual_instruction = instruction.strip()
     if instruction_file:
-        return Path(instruction_file).read_text(encoding="utf-8").strip()
-    return instruction.strip()
+        file_instruction = Path(instruction_file).read_text(encoding="utf-8").strip()
+        if manual_instruction:
+            return f"{file_instruction}\n\n{manual_instruction}".strip()
+        return file_instruction
+    return manual_instruction
 
 
 def get_ai() -> AIEngine:

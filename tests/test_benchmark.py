@@ -60,6 +60,13 @@ class BenchmarkTests(unittest.TestCase):
 
             self.assertEqual(summary["total_cases"], 1)
             self.assertTrue(summary["results"])
+            self.assertIn("average_grounding_coverage", summary)
+            self.assertIn("average_heuristic_alignment", summary)
+            self.assertIn("average_confidence", summary)
+            self.assertIn("cluster_keys", summary)
+            self.assertIn("grounding_coverage", summary["results"][0])
+            self.assertIn("heuristic_alignment", summary["results"][0])
+            self.assertIn("confidence_score", summary["results"][0])
             self.assertTrue(report_path.exists())
 
 
