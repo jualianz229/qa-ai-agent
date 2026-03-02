@@ -1,0 +1,1030 @@
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from core.ontology import ACTION_ONTOLOGY, COMPONENT_ONTOLOGY, FIELD_ONTOLOGY
+
+
+@dataclass
+class PageModelBuilder:
+    page_info: dict
+
+    def build(self) -> dict:
+        fingerprint = self.page_info.get("page_fingerprint", {})
+        components = self._build_components()
+        form_catalog = self._build_form_catalog()
+        field_catalog = [field for form in form_catalog for field in form.get("fields", [])]
+        component_catalog = self._build_component_catalog(components)
+        actions = self._build_actions(components, form_catalog, component_catalog)
+        entities = self._build_entities(form_catalog, component_catalog)
+        navigation_graph = self._build_navigation_graph()
+        state_graph = self._build_state_graph(components, actions)
+        possible_flows = self._build_possible_flows(components, actions, component_catalog)
+        page_facts = self._derive_page_facts(components, fingerprint)
+        runtime_observer = self._build_runtime_observer()
+        session_model = self._build_session_model(page_facts, component_catalog)
+        return {
+            "page_identity": {
+                "url": self.page_info.get("url", ""),
+                "title": self.page_info.get("title", ""),
+                "metadata": self.page_info.get("metadata", {}),
+            },
+            "components": components,
+            "actions": actions,
+            "entities": entities,
+            "content_blocks": self.page_info.get("sections", []),
+            "navigation_graph": navigation_graph,
+            "state_graph": state_graph,
+            "possible_flows": possible_flows,
+            "form_catalog": form_catalog,
+            "field_catalog": field_catalog,
+            "field_alias_map": {field["field_key"]: field.get("aliases", []) for field in field_catalog},
+            "component_catalog": component_catalog,
+            "component_alias_map": {component["component_key"]: component.get("aliases", []) for component in component_catalog},
+            "component_ontology": COMPONENT_ONTOLOGY,
+            "action_ontology": ACTION_ONTOLOGY,
+            "field_ontology": FIELD_ONTOLOGY,
+            "fingerprint": fingerprint,
+            "page_facts": page_facts,
+            "runtime_observer": runtime_observer,
+            "session_model": session_model,
+            "site_profile": self.page_info.get("site_profile", {}),
+            "linked_pages": self.page_info.get("crawled_pages", []),
+        }
+
+    def _build_components(self) -> list[dict]:
+        components = []
+        fingerprint = self.page_info.get("page_fingerprint", {})
+        if fingerprint.get("has_search"):
+            components.append({"type": "search", "source": "fingerprint"})
+        if fingerprint.get("has_filters"):
+            components.append({"type": "filter", "source": "fingerprint"})
+        if fingerprint.get("has_pagination"):
+            components.append({"type": "pagination", "source": "fingerprint"})
+        if fingerprint.get("has_table"):
+            components.append({"type": "table", "source": "tables"})
+        if fingerprint.get("has_form"):
+            components.append({"type": "form", "source": "forms"})
+        if fingerprint.get("has_standalone_controls"):
+            components.append({"type": "form", "source": "standalone_controls"})
+        if fingerprint.get("has_navigation"):
+            components.append({"type": "navigation", "source": "navigation"})
+        if fingerprint.get("has_article_like_sections"):
+            components.append({"type": "content", "source": "sections"})
+        if fingerprint.get("has_listing_pattern"):
+            components.append({"type": "listing", "source": "lists_links"})
+        for key, component_type in [
+            ("has_combobox", "combobox"),
+            ("has_datepicker", "datepicker"),
+            ("has_timepicker", "timepicker"),
+            ("has_toast", "toast"),
+            ("has_drawer", "drawer"),
+            ("has_upload", "file_upload"),
+            ("has_drag_drop", "drag_drop"),
+            ("has_rich_text", "rich_text_editor"),
+            ("has_infinite_scroll", "infinite_scroll"),
+            ("has_carousel", "carousel"),
+            ("has_iframe", "iframe"),
+            ("has_shadow_dom", "shadow_dom"),
+            ("has_chart", "chart"),
+            ("has_map", "map"),
+            ("has_cookie_banner", "consent_banner"),
+            ("has_captcha", "captcha"),
+            ("has_spa_shell", "spa_shell"),
+            ("has_graphql", "graphql_surface"),
+            ("has_websocket", "live_feed"),
+            ("has_live_updates", "live_feed"),
+            ("has_otp_flow", "otp_verification"),
+            ("has_sso", "sso_login"),
+        ]:
+            if fingerprint.get(key):
+                components.append({"type": component_type, "source": "fingerprint"})
+
+        for heading in self.page_info.get("headings", []):
+            text = heading.get("text", "").lower()
+            for component_type, spec in COMPONENT_ONTOLOGY.items():
+                if any(pattern in text for pattern in spec["signals"]):
+                    components.append({"type": component_type, "source": "heading", "label": heading.get("text", "")})
+
+        deduped = []
+        seen = set()
+        for component in components:
+            key = (component.get("type"), component.get("label", ""))
+            if key not in seen:
+                deduped.append(component)
+                seen.add(key)
+        return deduped
+
+    def _build_actions(self, components: list[dict], form_catalog: list[dict], component_catalog: list[dict]) -> list[dict]:
+        actions = [{"type": "open_url", "target": self.page_info.get("url", "")}]
+        button_texts = self.page_info.get("buttons", [])[:10]
+        for text in button_texts:
+            actions.append({"type": "click", "target": text, "kind": "button"})
+        for link in self.page_info.get("links", [])[:10]:
+            if isinstance(link, dict):
+                actions.append({"type": "click", "target": link.get("text", ""), "kind": "link", "href": link.get("href", "")})
+        for form in form_catalog[:4]:
+            for field in form.get("fields", [])[:8]:
+                target = field.get("semantic_label") or field.get("label") or field.get("name") or field.get("id")
+                actions.append(
+                    {
+                        "type": self._field_action_type(field),
+                        "target": target,
+                        "input_type": field.get("type", "text"),
+                        "input_kind": field.get("widget", "") or field.get("type", ""),
+                        "field_key": field.get("field_key", ""),
+                        "semantic_type": field.get("semantic_type", ""),
+                        "aliases": field.get("aliases", []),
+                    }
+                )
+        for component in component_catalog[:12]:
+            if component.get("type") in {
+                "tabs", "accordion", "breadcrumb", "pagination", "card", "modal", "drawer",
+                "carousel", "consent_banner", "toast", "sso_login"
+            }:
+                target = component.get("label", "")
+                if target:
+                    actions.append(
+                        {
+                            "type": "dismiss" if component.get("type") == "consent_banner" else "click",
+                            "target": target,
+                            "component_key": component.get("component_key", ""),
+                            "component_type": component.get("type", ""),
+                            "aliases": component.get("aliases", []),
+                        }
+                    )
+        if any(component.get("type") == "live_feed" for component in component_catalog):
+            actions.append({"type": "wait_for_text", "target": "live update", "component_type": "live_feed"})
+        if not actions:
+            actions.append({"type": "inspect", "target": "page"})
+        return actions
+
+    def _build_entities(self, form_catalog: list[dict], component_catalog: list[dict]) -> list[dict]:
+        entities = []
+        for heading in self.page_info.get("headings", [])[:8]:
+            entities.append({"type": "heading", "value": heading.get("text", "")})
+        for table in self.page_info.get("tables", [])[:4]:
+            entities.append({"type": "table_headers", "value": table})
+        for form in form_catalog[:4]:
+            for field in form.get("fields", [])[:10]:
+                entities.append({"type": "field", "value": field.get("semantic_label") or field.get("label") or field.get("field_key", "")})
+        for component in component_catalog[:16]:
+            entities.append({"type": "component", "value": component.get("label", "") or component.get("component_key", "")})
+        return entities
+
+    def _build_navigation_graph(self) -> dict:
+        nodes = [self.page_info.get("url", "")]
+        edges = []
+        for link in self.page_info.get("links", [])[:20]:
+            if isinstance(link, dict):
+                href = link.get("href", "")
+                if href:
+                    edges.append({"from": self.page_info.get("url", ""), "to": href, "label": link.get("text", "")})
+        for page in self.page_info.get("crawled_pages", []):
+            page_url = page.get("url", "")
+            if page_url:
+                nodes.append(page_url)
+        return {"nodes": nodes, "edges": edges}
+
+    def _build_state_graph(self, components: list[dict], actions: list[dict]) -> dict:
+        states = [{"id": "landing", "label": "Initial page load"}]
+        transitions = []
+        component_types = {component.get("type") for component in components}
+
+        if "navigation" in component_types:
+            states.append({"id": "navigated", "label": "After navigation click"})
+            transitions.append({"from": "landing", "to": "navigated", "via": "click"})
+        if "search" in component_types:
+            states.append({"id": "searched", "label": "After search input/action"})
+            transitions.append({"from": "landing", "to": "searched", "via": "fill/click"})
+        if "filter" in component_types:
+            states.append({"id": "filtered", "label": "After filter/sort change"})
+            transitions.append({"from": "landing", "to": "filtered", "via": "select/click"})
+        if "pagination" in component_types:
+            states.append({"id": "paginated", "label": "After pagination change"})
+            transitions.append({"from": "landing", "to": "paginated", "via": "click"})
+        if "form" in component_types:
+            states.append({"id": "submitted", "label": "After form submission"})
+            transitions.append({"from": "landing", "to": "submitted", "via": "fill/click"})
+        if "consent_banner" in component_types:
+            states.append({"id": "consent_dismissed", "label": "After consent banner is dismissed"})
+            transitions.append({"from": "landing", "to": "consent_dismissed", "via": "dismiss"})
+        if "otp_verification" in component_types:
+            states.append({"id": "otp_verified", "label": "After OTP or verification code is submitted"})
+            transitions.append({"from": "submitted", "to": "otp_verified", "via": "fill/click"})
+        if "sso_login" in component_types:
+            states.append({"id": "sso_redirect", "label": "After SSO provider redirect begins"})
+            transitions.append({"from": "landing", "to": "sso_redirect", "via": "click"})
+        if "drawer" in component_types:
+            states.append({"id": "drawer_open", "label": "After drawer is opened"})
+            transitions.append({"from": "landing", "to": "drawer_open", "via": "click"})
+        if "modal" in component_types:
+            states.append({"id": "dialog_open", "label": "After modal/dialog is opened"})
+            transitions.append({"from": "landing", "to": "dialog_open", "via": "click"})
+        if "carousel" in component_types:
+            states.append({"id": "slide_changed", "label": "After carousel slide change"})
+            transitions.append({"from": "landing", "to": "slide_changed", "via": "click"})
+        if "infinite_scroll" in component_types:
+            states.append({"id": "list_extended", "label": "After more content is loaded"})
+            transitions.append({"from": "landing", "to": "list_extended", "via": "scroll/click"})
+        if "spa_shell" in component_types:
+            states.append({"id": "route_changed", "label": "After in-app route change"})
+            transitions.append({"from": "landing", "to": "route_changed", "via": "click/wait"})
+        if "live_feed" in component_types:
+            states.append({"id": "live_updated", "label": "After live data updates on the page"})
+            transitions.append({"from": "landing", "to": "live_updated", "via": "wait"})
+        if len(states) == 1 and actions:
+            states.append({"id": "inspected", "label": "After generic inspection"})
+            transitions.append({"from": "landing", "to": "inspected", "via": actions[0].get("type", "inspect")})
+        return {"states": states, "transitions": transitions}
+
+    def _build_possible_flows(self, components: list[dict], actions: list[dict], component_catalog: list[dict]) -> list[dict]:
+        flows = [{"name": "open_page", "steps": [{"action": "open_url", "target": self.page_info.get("url", "")}]}]
+        component_types = {component.get("type") for component in components}
+        if "navigation" in component_types:
+            flows.append({"name": "navigate_via_menu", "steps": [action for action in actions if action.get("kind") == "link"][:3]})
+        if "search" in component_types:
+            flows.append({"name": "use_search", "steps": [action for action in actions if action.get("type") in {"fill", "click"}][:3]})
+        if "form" in component_types:
+            flows.append({"name": "submit_form", "steps": [action for action in actions if action.get("type") in {"fill", "click"}][:4]})
+        if any(component.get("type") == "tabs" for component in component_catalog):
+            flows.append({"name": "switch_tabs", "steps": [action for action in actions if action.get("component_type") == "tabs"][:3]})
+        if any(component.get("type") == "accordion" for component in component_catalog):
+            flows.append({"name": "expand_collapse_sections", "steps": [action for action in actions if action.get("component_type") == "accordion"][:3]})
+        if any(component.get("type") == "pagination" for component in component_catalog):
+            flows.append({"name": "change_page", "steps": [action for action in actions if action.get("component_type") == "pagination"][:3]})
+        if any(component.get("type") == "card" for component in component_catalog):
+            flows.append({"name": "open_card_detail", "steps": [action for action in actions if action.get("component_type") == "card"][:3]})
+        if any(component.get("type") == "drawer" for component in component_catalog):
+            flows.append({"name": "open_close_drawer", "steps": [action for action in actions if action.get("component_type") == "drawer"][:3]})
+        if any(component.get("type") == "carousel" for component in component_catalog):
+            flows.append({"name": "navigate_carousel", "steps": [action for action in actions if action.get("component_type") == "carousel"][:3]})
+        if any(component.get("type") == "file_upload" for component in component_catalog):
+            flows.append({"name": "upload_file", "steps": [action for action in actions if action.get("type") == "upload"][:3]})
+        if any(component.get("type") == "rich_text_editor" for component in component_catalog):
+            flows.append({"name": "edit_rich_text", "steps": [action for action in actions if action.get("input_kind") == "rich_text"][:3]})
+        if any(component.get("type") == "consent_banner" for component in component_catalog):
+            flows.append({"name": "dismiss_consent_banner", "steps": [action for action in actions if action.get("component_type") == "consent_banner"][:2]})
+        if any(component.get("type") == "otp_verification" for component in component_catalog):
+            flows.append({"name": "verify_otp", "steps": [action for action in actions if action.get("semantic_type") == "otp_code"][:3]})
+        if any(component.get("type") == "sso_login" for component in component_catalog):
+            flows.append({"name": "start_sso_login", "steps": [action for action in actions if action.get("component_type") == "sso_login"][:2]})
+        if any(component.get("type") == "live_feed" for component in component_catalog):
+            flows.append({"name": "observe_live_updates", "steps": [action for action in actions if action.get("component_type") == "live_feed" or action.get("type") == "wait_for_text"][:2]})
+        return flows
+
+    def _derive_page_facts(self, components: list[dict], fingerprint: dict) -> dict:
+        component_types = {component.get("type") for component in components}
+        return {
+            "form": bool(fingerprint.get("has_form") or "form" in component_types),
+            "auth": bool(fingerprint.get("has_auth_pattern") or "sso_login" in component_types or "otp_verification" in component_types),
+            "search": bool(fingerprint.get("has_search") or "search" in component_types),
+            "filter": bool(fingerprint.get("has_filters") or "filter" in component_types),
+            "pagination": bool(fingerprint.get("has_pagination") or "pagination" in component_types),
+            "table": bool(fingerprint.get("has_table") or "table" in component_types),
+            "navigation": bool(fingerprint.get("has_navigation") or "navigation" in component_types),
+            "listing": bool(fingerprint.get("has_listing_pattern") or "listing" in component_types),
+            "content": bool(fingerprint.get("has_article_like_sections") or "content" in component_types),
+            "upload": bool(fingerprint.get("has_upload") or "file_upload" in component_types),
+            "rich_text": bool(fingerprint.get("has_rich_text") or "rich_text_editor" in component_types),
+            "iframe": bool(fingerprint.get("has_iframe") or "iframe" in component_types),
+            "shadow_dom": bool(fingerprint.get("has_shadow_dom") or "shadow_dom" in component_types),
+            "consent_banner": bool(fingerprint.get("has_cookie_banner") or "consent_banner" in component_types),
+            "captcha": bool(fingerprint.get("has_captcha") or "captcha" in component_types),
+            "combobox": bool(fingerprint.get("has_combobox") or "combobox" in component_types),
+            "datepicker": bool(fingerprint.get("has_datepicker") or "datepicker" in component_types),
+            "timepicker": bool(fingerprint.get("has_timepicker") or "timepicker" in component_types),
+            "toast": bool(fingerprint.get("has_toast") or "toast" in component_types),
+            "drawer": bool(fingerprint.get("has_drawer") or "drawer" in component_types),
+            "carousel": bool(fingerprint.get("has_carousel") or "carousel" in component_types),
+            "infinite_scroll": bool(fingerprint.get("has_infinite_scroll") or "infinite_scroll" in component_types),
+            "map": bool(fingerprint.get("has_map") or "map" in component_types),
+            "chart": bool(fingerprint.get("has_chart") or "chart" in component_types),
+            "spa_shell": bool(fingerprint.get("has_spa_shell") or "spa_shell" in component_types),
+            "graphql": bool(fingerprint.get("has_graphql") or "graphql_surface" in component_types),
+            "websocket": bool(fingerprint.get("has_websocket") or "live_feed" in component_types),
+            "live_updates": bool(fingerprint.get("has_live_updates") or "live_feed" in component_types),
+            "otp_flow": bool(fingerprint.get("has_otp_flow") or "otp_verification" in component_types),
+            "sso": bool(fingerprint.get("has_sso") or "sso_login" in component_types),
+            "auth_checkpoint": bool(fingerprint.get("has_auth_checkpoint") or "otp_verification" in component_types or "captcha" in component_types),
+        }
+
+    def _build_runtime_observer(self) -> dict:
+        signals = dict(self.page_info.get("runtime_signals", {}))
+        return {
+            "xhr_count": int(signals.get("xhr_count", 0) or 0),
+            "fetch_count": int(signals.get("fetch_count", 0) or 0),
+            "graphql_request_count": int(signals.get("graphql_request_count", 0) or 0),
+            "websocket_count": int(signals.get("websocket_count", 0) or 0),
+            "history_length": int(signals.get("history_length", 0) or 0),
+            "route_kind": str(signals.get("route_kind", "")),
+            "local_storage_keys": list(signals.get("local_storage_keys", []))[:10],
+            "session_storage_keys": list(signals.get("session_storage_keys", []))[:10],
+            "embedded_contexts": list(self.page_info.get("embedded_contexts", []))[:10],
+        }
+
+    def _build_session_model(self, page_facts: dict, component_catalog: list[dict]) -> dict:
+        component_types = {component.get("type") for component in component_catalog}
+        login_surface = page_facts.get("auth", False) and page_facts.get("form", False)
+        auth_entry = "sso_login" in component_types or "otp_verification" in component_types or login_surface
+        return {
+            "auth_entry": auth_entry,
+            "requires_authenticated_session": page_facts.get("auth_checkpoint", False) and not login_surface,
+            "supported_auth_modes": [
+                mode
+                for mode, enabled in [
+                    ("session_restore", True),
+                    ("login_form", login_surface),
+                    ("otp", page_facts.get("otp_flow", False)),
+                    ("sso", page_facts.get("sso", False)),
+                ]
+                if enabled
+            ],
+            "has_manual_checkpoint": bool(page_facts.get("auth_checkpoint", False) or page_facts.get("captcha", False)),
+            "consent_present": bool(page_facts.get("consent_banner", False)),
+            "spa_surface": bool(page_facts.get("spa_shell", False)),
+        }
+
+    def _build_component_catalog(self, components: list[dict]) -> list[dict]:
+        catalog = []
+        counts = {}
+        for raw in self.page_info.get("ui_components", [])[:40]:
+            component_type = str(raw.get("type", "")).strip().lower()
+            if not component_type:
+                continue
+            counts[component_type] = counts.get(component_type, 0) + 1
+            suffix = f"_{counts[component_type]}" if counts[component_type] > 1 else ""
+            label = str(raw.get("label", "")).strip()
+            aliases = self._build_component_aliases(raw)
+            catalog.append(
+                {
+                    "component_key": f"{component_type}{suffix}",
+                    "type": component_type,
+                    "label": label,
+                    "aliases": aliases,
+                    "items": list(raw.get("items", []))[:10],
+                    "details": {
+                        key: value
+                        for key, value in raw.items()
+                        if key not in {"type", "label", "items"}
+                    },
+                }
+            )
+        for component in components:
+            component_type = str(component.get("type", "")).strip().lower()
+            if component_type and all(existing.get("type") != component_type for existing in catalog):
+                counts[component_type] = counts.get(component_type, 0) + 1
+                catalog.append(
+                    {
+                        "component_key": f"{component_type}_{counts[component_type]}",
+                        "type": component_type,
+                        "label": str(component.get("label", "")).strip(),
+                        "aliases": self._build_component_aliases(component),
+                        "items": [],
+                        "details": {k: v for k, v in component.items() if k not in {"type", "label"}},
+                    }
+                )
+        return catalog
+
+    def _build_form_catalog(self) -> list[dict]:
+        catalog = []
+        field_counts = {}
+        for index, form in enumerate(self.page_info.get("forms", [])[:8], start=1):
+            if not isinstance(form, dict):
+                continue
+            form_key = f"form_{index}"
+            form_entry = {
+                "form_key": form_key,
+                "id": str(form.get("id", "")).strip(),
+                "name": str(form.get("name", "")).strip(),
+                "action": str(form.get("action", "")).strip(),
+                "method": str(form.get("method", "get")).strip().lower(),
+                "submit_texts": list(form.get("submit_texts", []))[:6],
+                "context_text": str(form.get("context_text", "")).strip(),
+                "fields": [],
+            }
+            for field in form.get("fields", [])[:20]:
+                enriched = self._enrich_field(field, form_entry, field_counts)
+                form_entry["fields"].append(enriched)
+            catalog.append(form_entry)
+        standalone_controls = self.page_info.get("standalone_controls", [])
+        if standalone_controls:
+            pseudo_form = {
+                "form_key": f"form_{len(catalog) + 1}",
+                "id": "",
+                "name": "standalone_controls",
+                "action": "",
+                "method": "get",
+                "submit_texts": [],
+                "context_text": "Standalone controls detected outside forms",
+                "fields": [],
+            }
+            for field in standalone_controls[:20]:
+                pseudo_form["fields"].append(self._enrich_field(field, pseudo_form, field_counts))
+            catalog.append(pseudo_form)
+        return catalog
+
+    def _enrich_field(self, field: dict, form_entry: dict, field_counts: dict) -> dict:
+        semantic_type, confidence = self._infer_field_semantics(field, form_entry)
+        semantic_label = FIELD_ONTOLOGY.get(semantic_type, FIELD_ONTOLOGY["generic_text"])["label"]
+        aliases = self._build_field_aliases(field, semantic_type)
+        base_key = semantic_type or "generic_text"
+        field_counts[base_key] = field_counts.get(base_key, 0) + 1
+        suffix = f"_{field_counts[base_key]}" if field_counts[base_key] > 1 else ""
+        selector_candidates = self._build_selector_candidates(field)
+        return {
+            "field_key": f"{base_key}{suffix}",
+            "semantic_type": semantic_type,
+            "semantic_label": semantic_label,
+            "semantic_confidence": confidence,
+            "tag": field.get("tag", ""),
+            "type": field.get("type", ""),
+            "name": field.get("name", ""),
+            "id": field.get("id", ""),
+            "label": field.get("label", ""),
+            "placeholder": field.get("placeholder", ""),
+            "aria_label": field.get("aria_label", ""),
+            "autocomplete": field.get("autocomplete", ""),
+            "role": field.get("role", ""),
+            "widget": field.get("widget", ""),
+            "list_id": field.get("list_id", ""),
+            "contenteditable": bool(field.get("contenteditable", False)),
+            "accept": field.get("accept", ""),
+            "multiple": bool(field.get("multiple", False)),
+            "required": bool(field.get("required", False)),
+            "aliases": aliases,
+            "selector_candidates": selector_candidates,
+            "options": list(field.get("options", []))[:12],
+            "context_text": field.get("context_text", ""),
+        }
+
+    def _infer_field_semantics(self, field: dict, form_entry: dict) -> tuple[str, float]:
+        haystack = " ".join(
+            str(part or "")
+            for part in [
+                field.get("label", ""),
+                field.get("name", ""),
+                field.get("id", ""),
+                field.get("placeholder", ""),
+                field.get("aria_label", ""),
+                field.get("autocomplete", ""),
+                field.get("inputmode", ""),
+                field.get("data_testid", ""),
+                field.get("semantic_text", ""),
+                form_entry.get("context_text", ""),
+            ]
+        ).lower()
+        input_type = str(field.get("type", "")).lower()
+        autocomplete = str(field.get("autocomplete", "")).lower()
+        widget = str(field.get("widget", "")).lower()
+        best_key = "generic_text"
+        best_score = 0
+
+        if input_type == "file" or widget == "upload":
+            return "file_upload", 0.99
+        if input_type == "time" or widget == "timepicker":
+            return "time", 0.96
+        if input_type in {"date", "datetime-local", "month", "week"} or widget == "datepicker":
+            return "date", 0.96
+        if widget == "rich_text":
+            return "rich_text", 0.95
+        if widget == "combobox":
+            return "combobox_selection", 0.92
+
+        for key, spec in FIELD_ONTOLOGY.items():
+            score = 0
+            for signal in spec.get("signals", ()):
+                if signal in haystack:
+                    score += max(4, len(signal.split()))
+            if autocomplete and autocomplete in spec.get("autocomplete", ()):
+                score += 8
+            if input_type and input_type in spec.get("input_types", ()):
+                score += 3
+            if key == "generic_text":
+                score += 1
+            if score > best_score:
+                best_key = key
+                best_score = score
+
+        if input_type == "password":
+            return "password", 0.99
+        if input_type == "email":
+            return "email", 0.99
+        if input_type == "tel":
+            return "phone_number", 0.99
+        if input_type == "search":
+            return "search_query", 0.99
+        if input_type == "url":
+            return "url", 0.95
+        if input_type == "date":
+            return "date", 0.95
+        if field.get("tag") == "textarea" and best_key == "generic_text":
+            return "message", 0.8
+        if input_type == "number" and best_key == "generic_text":
+            return "quantity", 0.65
+        confidence = round(min(0.99, 0.25 + (best_score * 0.07)), 2)
+        return best_key, confidence
+
+    def _build_field_aliases(self, field: dict, semantic_type: str) -> list[str]:
+        candidates = list(FIELD_ONTOLOGY.get(semantic_type, {}).get("aliases", ()))
+        candidates.extend(
+            [
+                field.get("label", ""),
+                field.get("name", ""),
+                field.get("id", ""),
+                field.get("placeholder", ""),
+                field.get("aria_label", ""),
+                field.get("autocomplete", ""),
+                field.get("data_testid", ""),
+                field.get("role", ""),
+                field.get("list_id", ""),
+                field.get("widget", ""),
+            ]
+        )
+        aliases = []
+        seen = set()
+        for item in candidates:
+            text = re.sub(r"\s+", " ", str(item or "")).strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            compact = re.sub(r"[^a-z0-9]+", " ", lowered).strip()
+            for variant in [text, compact]:
+                normalized = re.sub(r"\s+", " ", variant).strip()
+                if normalized and normalized.lower() not in seen:
+                    aliases.append(normalized)
+                    seen.add(normalized.lower())
+        return aliases[:20]
+
+    def _build_selector_candidates(self, field: dict) -> list[str]:
+        selectors = []
+        tag = field.get("tag", "") or "input"
+        role = str(field.get("role", "")).strip()
+        widget = str(field.get("widget", "")).strip().lower()
+        if field.get("contenteditable"):
+            selectors.append('[contenteditable="true"]')
+        if role:
+            selectors.append(f'[role="{role}"]')
+        for attr in ["name", "id", "placeholder", "aria_label", "data_testid"]:
+            value = str(field.get(attr, "")).strip()
+            if not value:
+                continue
+            safe = value.replace("\\", "\\\\").replace('"', '\\"')
+            if attr == "id":
+                selectors.append(f'{tag}[id="{safe}"]')
+            elif attr == "aria_label":
+                selectors.append(f'{tag}[aria-label="{safe}"]')
+            elif attr == "data_testid":
+                selectors.append(f'{tag}[data-testid="{safe}"]')
+                selectors.append(f'{tag}[data-test="{safe}"]')
+            else:
+                selectors.append(f'{tag}[{attr}="{safe}"]')
+        if field.get("list_id"):
+            safe_list = str(field.get("list_id", "")).replace("\\", "\\\\").replace('"', '\\"')
+            selectors.append(f'{tag}[list="{safe_list}"]')
+        if widget == "combobox":
+            selectors.append('[role="combobox"]')
+            selectors.append('[aria-autocomplete]')
+        if widget == "rich_text":
+            selectors.extend([
+                '[contenteditable="true"]',
+                '.ql-editor',
+                '.ProseMirror',
+                '.tox-edit-area',
+                '.ck-editor__editable',
+            ])
+        if widget == "upload":
+            selectors.append('input[type="file"]')
+        return list(dict.fromkeys(selectors))[:12]
+
+    def _field_action_type(self, field: dict) -> str:
+        widget = str(field.get("widget", "")).lower()
+        if field.get("type") == "file" or widget == "upload":
+            return "upload"
+        if field.get("tag") == "select" or widget == "combobox":
+            return "select"
+        return "fill"
+
+    def _build_component_aliases(self, component: dict) -> list[str]:
+        aliases = []
+        seen = set()
+        values = [component.get("label", ""), component.get("type", "")]
+        values.extend(component.get("items", []))
+        for value in values:
+            text = re.sub(r"\s+", " ", str(value or "")).strip()
+            normalized = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+            for variant in [text, normalized]:
+                clean = re.sub(r"\s+", " ", str(variant or "")).strip()
+                if clean and clean.lower() not in seen:
+                    aliases.append(clean)
+                    seen.add(clean.lower())
+        return aliases[:15]
+
+
+def build_normalized_page_model(page_info: dict) -> dict:
+    return PageModelBuilder(page_info).build()
+
+
+def save_json_artifact(data: dict, output_path: Path) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return output_path
+
+
+def build_execution_plan(test_cases: list[dict], page_model: dict, base_url: str, site_profile: dict | None = None) -> dict:
+    site_profile = site_profile or page_model.get("site_profile", {})
+    execution_settings = _build_execution_settings(page_model, site_profile)
+    plans = []
+    for case in test_cases:
+        steps = str(case.get("Steps to Reproduce", ""))
+        expected = str(case.get("Expected Result", ""))
+        automation = str(case.get("Automation", "auto")).strip().lower() or "auto"
+        actions = _extract_actions(steps, page_model)
+        pre_actions = _derive_pre_actions(case, page_model, site_profile)
+        checkpoints = _infer_manual_checkpoints(case, page_model, site_profile)
+        plan = {
+            "id": str(case.get("ID", "")).strip(),
+            "title": str(case.get("Title", "")).strip(),
+            "module": str(case.get("Module", "")).strip(),
+            "automation": automation,
+            "target_url": _extract_target_url(steps, base_url),
+            "pre_actions": pre_actions,
+            "actions": actions,
+            "assertions": _extract_assertions(expected, page_model),
+            "dependencies": [],
+            "state_targets": _infer_state_targets(page_model, case),
+            "checkpoints": checkpoints,
+            "session_strategy": _build_session_strategy(page_model, case, site_profile),
+            "orchestration": _build_orchestration(page_model, automation, checkpoints),
+            "interaction_hints": _build_interaction_hints(page_model, actions, execution_settings),
+            "source_case": {
+                "category": str(case.get("Category", "")).strip(),
+                "test_type": str(case.get("Test Type", "")).strip(),
+                "expected_result": expected,
+            },
+        }
+        plans.append(plan)
+    return {
+        "version": 2,
+        "base_url": base_url,
+        "page_identity": page_model.get("page_identity", {}),
+        "state_graph": page_model.get("state_graph", {}),
+        "session_model": page_model.get("session_model", {}),
+        "runtime_observer": page_model.get("runtime_observer", {}),
+        "page_facts": page_model.get("page_facts", {}),
+        "site_profile": site_profile,
+        "settings": execution_settings,
+        "plans": plans,
+    }
+
+
+def _infer_state_targets(page_model: dict, case: dict | None = None) -> list[str]:
+    state_graph = page_model.get("state_graph", {})
+    states = [state.get("id", "") for state in state_graph.get("states", [])[1:5] if state.get("id")]
+    case_text = " ".join(str(case.get(key, "")) for key in ("Title", "Steps to Reproduce", "Expected Result")) if case else ""
+    lowered = case_text.lower()
+    preferred = []
+    for state in states:
+        if "consent" in lowered and "consent" in state:
+            preferred.append(state)
+        elif "otp" in lowered and "otp" in state:
+            preferred.append(state)
+        elif any(term in lowered for term in ("sso", "google", "microsoft")) and "sso" in state:
+            preferred.append(state)
+        elif any(term in lowered for term in ("route", "navigate", "redirect")) and any(token in state for token in ("route", "navigated")):
+            preferred.append(state)
+        elif any(term in lowered for term in ("live", "update", "refresh")) and "live" in state:
+            preferred.append(state)
+    return preferred[:3] or states[:3]
+
+
+def _build_execution_settings(page_model: dict, site_profile: dict | None) -> dict:
+    site_profile = site_profile or {}
+    interaction = site_profile.get("interaction", {})
+    runtime = page_model.get("runtime_observer", {})
+    return {
+        "step_delay_ms": int(interaction.get("step_delay_ms", 700)),
+        "settle_delay_ms": int(interaction.get("settle_delay_ms", 1000)),
+        "final_delay_ms": int(interaction.get("final_delay_ms", 1400)),
+        "retry_count": int(interaction.get("retry_count", 2)),
+        "has_live_runtime": bool(runtime.get("websocket_count", 0) or runtime.get("graphql_request_count", 0)),
+    }
+
+
+def _derive_pre_actions(case: dict, page_model: dict, site_profile: dict | None) -> list[dict]:
+    site_profile = site_profile or {}
+    case_text = " ".join(str(case.get(key, "")) for key in ("Title", "Steps to Reproduce", "Expected Result")).lower()
+    actions = []
+    if (
+        site_profile.get("execution", {}).get("auto_dismiss_consent", True)
+        and page_model.get("page_facts", {}).get("consent_banner")
+        and "cookie" not in case_text
+        and "consent" not in case_text
+    ):
+        actions.append(
+            {
+                "type": "dismiss",
+                "target": "Accept cookies",
+                "role": "button",
+                "component_type": "consent_banner",
+                "aliases": ["accept", "agree", "allow", "ok", "got it", "accept cookies"],
+            }
+        )
+    return actions
+
+
+def _infer_manual_checkpoints(case: dict, page_model: dict, site_profile: dict | None) -> list[dict]:
+    site_profile = site_profile or {}
+    case_text = " ".join(str(case.get(key, "")) for key in ("Title", "Steps to Reproduce", "Expected Result")).lower()
+    page_facts = page_model.get("page_facts", {})
+    checkpoints = []
+    manual_terms = [term.lower() for term in site_profile.get("auth", {}).get("manual_checkpoint_terms", [])]
+    if page_facts.get("captcha") or "captcha" in case_text:
+        checkpoints.append({"type": "captcha", "mode": "manual", "reason": "Captcha or bot verification may block automation."})
+    if page_facts.get("otp_flow") or any(term in case_text for term in manual_terms if "otp" in term or "verification" in term):
+        checkpoints.append({"type": "otp", "mode": "manual", "reason": "OTP or verification code may require human input."})
+    if page_facts.get("sso") and any(term in case_text for term in ("google", "microsoft", "sso", "single sign-on")):
+        checkpoints.append({"type": "sso", "mode": "semi-auto", "reason": "SSO redirect may require external confirmation."})
+    return checkpoints
+
+
+def _build_session_strategy(page_model: dict, case: dict, site_profile: dict | None) -> dict:
+    site_profile = site_profile or {}
+    session_model = page_model.get("session_model", {})
+    case_text = " ".join(str(case.get(key, "")) for key in ("Title", "Steps to Reproduce", "Expected Result")).lower()
+    return {
+        "auth_entry": bool(session_model.get("auth_entry", False)),
+        "requires_session": bool(session_model.get("requires_authenticated_session", False) and "login" not in case_text),
+        "supported_auth_modes": list(session_model.get("supported_auth_modes", [])),
+        "storage_state_candidates": list(site_profile.get("auth", {}).get("storage_state_candidates", [])),
+        "manual_checkpoints": list(_infer_manual_checkpoints(case, page_model, site_profile)),
+    }
+
+
+def _build_orchestration(page_model: dict, automation: str, checkpoints: list[dict]) -> dict:
+    page_facts = page_model.get("page_facts", {})
+    mode = automation
+    if checkpoints and mode == "auto":
+        mode = "semi-auto"
+    return {
+        "mode": mode,
+        "has_manual_checkpoint": bool(checkpoints),
+        "checkpoint_count": len(checkpoints),
+        "supports_partial_execution": mode in {"auto", "semi-auto"},
+        "spa_sensitive": bool(page_facts.get("spa_shell") or page_facts.get("live_updates")),
+    }
+
+
+def _build_interaction_hints(page_model: dict, actions: list[dict], settings: dict) -> dict:
+    page_facts = page_model.get("page_facts", {})
+    dynamic_surface = bool(page_facts.get("spa_shell") or page_facts.get("live_updates") or page_facts.get("graphql"))
+    list_like = bool(page_facts.get("listing") or page_facts.get("infinite_scroll"))
+    has_clicks = any(action.get("type") in {"click", "dismiss"} for action in actions)
+    return {
+        "step_delay_ms": settings.get("step_delay_ms", 700),
+        "settle_delay_ms": settings.get("settle_delay_ms", 1000) + (300 if dynamic_surface else 0),
+        "final_delay_ms": settings.get("final_delay_ms", 1400),
+        "expects_route_change": has_clicks and bool(page_facts.get("navigation") or page_facts.get("spa_shell")),
+        "prefers_scroll_after_click": list_like,
+        "watch_live_updates": bool(page_facts.get("live_updates")),
+    }
+
+
+def _extract_target_url(steps: str, fallback_url: str) -> str:
+    match = re.search(r"1\.\s*Open the site\s+(\S+)", steps, flags=re.IGNORECASE)
+    return match.group(1).strip().rstrip(".,") if match else fallback_url
+
+
+def _extract_actions(steps: str, page_model: dict | None = None) -> list[dict]:
+    actions = []
+    input_pattern = re.compile(
+        r"^Input\s+['\"]([^'\"]*)['\"]\s+into\s+the\s+(?:['\"]([^'\"]+)['\"]|(.+?))(?:\s+field)?\.?$",
+        flags=re.IGNORECASE,
+    )
+    click_pattern = re.compile(
+        r"^Click\s+the\s+(?:['\"]([^'\"]+)['\"]|(.+?))(?:\s+(button|link|menu|tab))?\.?$",
+        flags=re.IGNORECASE,
+    )
+    select_pattern = re.compile(
+        r"^(?:Select|Choose)\s+['\"]([^'\"]+)['\"]\s+from\s+the\s+(?:['\"]([^'\"]+)['\"]|(.+?))(?:\s+field)?\.?$",
+        flags=re.IGNORECASE,
+    )
+    upload_pattern = re.compile(
+        r"^Upload\s+['\"]([^'\"]+)['\"]\s+into\s+the\s+(?:['\"]([^'\"]+)['\"]|(.+?))(?:\s+field)?\.?$",
+        flags=re.IGNORECASE,
+    )
+    hover_pattern = re.compile(
+        r"^Hover\s+(?:over\s+)?the\s+(?:['\"]([^'\"]+)['\"]|(.+?))(?:\s+(button|link|menu|tab))?\.?$",
+        flags=re.IGNORECASE,
+    )
+    scroll_pattern = re.compile(
+        r"^Scroll(?:\s+to\s+the\s+(?:['\"]([^'\"]+)['\"]|(.+?)))?(?:\s+section)?\.?$",
+        flags=re.IGNORECASE,
+    )
+    wait_pattern = re.compile(
+        r"^Wait\s+for\s+(?:the\s+text\s+)?(?:['\"]([^'\"]+)['\"]|(.+?))\.?$",
+        flags=re.IGNORECASE,
+    )
+    dismiss_pattern = re.compile(
+        r"^(?:Dismiss|Close|Accept)\s+(?:the\s+)?(?:['\"]([^'\"]+)['\"]|(.+?))(?:\s+(banner|modal|dialog|popup))?\.?$",
+        flags=re.IGNORECASE,
+    )
+    clear_pattern = re.compile(
+        r"^Leave\s+the\s+(?:['\"]([^'\"]+)['\"]|(.+?))\s+field\s+(?:empty|blank)\.?$",
+        flags=re.IGNORECASE,
+    )
+
+    for raw_line in steps.splitlines():
+        line = re.sub(r"^\s*\d+\.\s*", "", str(raw_line or "")).strip()
+        if not line:
+            continue
+
+        input_match = input_pattern.match(line)
+        if input_match:
+            value, quoted_target, plain_target = input_match.groups()
+            action = {"type": "fill", "target": (quoted_target or plain_target or "").strip(), "value": value}
+            actions.append(_enrich_field_action(action, page_model))
+            continue
+
+        select_match = select_pattern.match(line)
+        if select_match:
+            value, quoted_target, plain_target = select_match.groups()
+            action = {"type": "select", "target": (quoted_target or plain_target or "").strip(), "value": value}
+            actions.append(_enrich_field_action(action, page_model))
+            continue
+
+        upload_match = upload_pattern.match(line)
+        if upload_match:
+            value, quoted_target, plain_target = upload_match.groups()
+            action = {"type": "upload", "target": (quoted_target or plain_target or "").strip(), "value": value}
+            actions.append(_enrich_field_action(action, page_model))
+            continue
+
+        clear_match = clear_pattern.match(line)
+        if clear_match:
+            quoted_target, plain_target = clear_match.groups()
+            action = {"type": "fill", "target": (quoted_target or plain_target or "").strip(), "value": ""}
+            actions.append(_enrich_field_action(action, page_model))
+            continue
+
+        click_match = click_pattern.match(line)
+        if click_match:
+            quoted_target, plain_target, role = click_match.groups()
+            actions.append({"type": "click", "target": (quoted_target or plain_target or "").strip(), "role": (role or "").strip().lower()})
+            continue
+
+        hover_match = hover_pattern.match(line)
+        if hover_match:
+            quoted_target, plain_target, role = hover_match.groups()
+            actions.append({"type": "hover", "target": (quoted_target or plain_target or "").strip(), "role": (role or "").strip().lower()})
+            continue
+
+        scroll_match = scroll_pattern.match(line)
+        if scroll_match:
+            quoted_target, plain_target = scroll_match.groups()
+            actions.append({"type": "scroll", "target": (quoted_target or plain_target or "").strip()})
+            continue
+
+        wait_match = wait_pattern.match(line)
+        if wait_match:
+            quoted_target, plain_target = wait_match.groups()
+            actions.append({"type": "wait_for_text", "target": (quoted_target or plain_target or "").strip()})
+            continue
+
+        dismiss_match = dismiss_pattern.match(line)
+        if dismiss_match:
+            quoted_target, plain_target, role = dismiss_match.groups()
+            actions.append({"type": "dismiss", "target": (quoted_target or plain_target or "").strip(), "role": (role or "button").strip().lower()})
+
+    if not actions:
+        actions.append({"type": "inspect", "target": "page"})
+    return actions
+
+
+def _extract_assertions(expected: str, page_model: dict | None = None) -> list[dict]:
+    assertions = []
+    quoted = re.findall(r"'([^']+)'|\"([^\"]+)\"", expected)
+    quoted_values = [a or b for a, b in quoted if a or b]
+    expected_lower = expected.lower()
+    if "url" in expected_lower or "redirect" in expected_lower or "open" in expected_lower or "navigate" in expected_lower:
+        path_match = re.search(r"/[a-zA-Z0-9\-_/?=&]+", expected)
+        if path_match:
+            assertions.append({"type": "assert_url_contains", "value": path_match.group(0)})
+        else:
+            redirect_match = re.search(r"redirect(?:ed)?\s+to\s+the\s+([a-z0-9 _-]+?)\s+page", expected_lower)
+            if redirect_match:
+                assertions.append({"type": "assert_url_contains", "value": _slug_phrase(redirect_match.group(1))})
+    if any(term in expected_lower for term in ("title", "page title")) and quoted_values:
+        assertions.append({"type": "assert_title_contains", "value": quoted_values[0]})
+    if any(term in expected_lower for term in ("not visible", "not displayed", "not shown", "should disappear", "hidden")):
+        for text in quoted_values[:2]:
+            assertions.append({"type": "assert_text_not_visible", "value": text})
+    if "button" in expected_lower and any(term in expected_lower for term in ("visible", "enabled", "shown")) and quoted_values:
+        assertions.append({"type": "assert_control_visible", "value": quoted_values[0]})
+    if "link" in expected_lower and any(term in expected_lower for term in ("visible", "shown")) and quoted_values:
+        assertions.append({"type": "assert_control_visible", "value": quoted_values[0]})
+    if "display" in expected_lower or "visible" in expected_lower or "shown" in expected_lower or "message" in expected_lower:
+        for text in quoted_values[:2]:
+            assertions.append({"type": "assert_text_visible", "value": text})
+    if "text" in expected_lower and quoted_values:
+        assertions.append({"type": "assert_control_text", "value": quoted_values[0]})
+    if not assertions:
+        generic_texts = _generic_assertion_texts(expected_lower, page_model)
+        if generic_texts:
+            assertions.append({"type": "assert_any_text_visible", "values": generic_texts})
+    if not assertions and quoted_values:
+        assertions.append({"type": "assert_text_visible", "value": quoted_values[0]})
+    return assertions
+
+
+def _enrich_field_action(action: dict, page_model: dict | None) -> dict:
+    if not page_model:
+        return action
+    match = _match_field_reference(action.get("target", ""), page_model)
+    if not match:
+        return action
+    enriched = dict(action)
+    enriched["field_key"] = match.get("field_key", "")
+    enriched["semantic_type"] = match.get("semantic_type", "")
+    enriched["semantic_label"] = match.get("semantic_label", "")
+    enriched["aliases"] = match.get("aliases", [])
+    enriched["selector_candidates"] = match.get("selector_candidates", [])
+    enriched["input_kind"] = match.get("widget", "") or match.get("type", "")
+    return enriched
+
+
+def _match_field_reference(target: str, page_model: dict) -> dict | None:
+    target_text = re.sub(r"\s+", " ", str(target or "")).strip().lower()
+    if not target_text:
+        return None
+    target_compact = re.sub(r"[^a-z0-9]+", "", target_text)
+    best = None
+    best_score = 0
+    for field in page_model.get("field_catalog", []):
+        score = 0
+        for alias in field.get("aliases", []):
+            alias_text = str(alias).strip().lower()
+            alias_compact = re.sub(r"[^a-z0-9]+", "", alias_text)
+            if alias_text == target_text:
+                score += 14
+            elif alias_compact and alias_compact == target_compact:
+                score += 12
+            elif alias_text and alias_text in target_text:
+                score += 8
+            elif target_text in alias_text:
+                score += 8
+            elif alias_compact and target_compact and (alias_compact in target_compact or target_compact in alias_compact):
+                score += 7
+        semantic_label = str(field.get("semantic_label", "")).lower()
+        if semantic_label == target_text:
+            score += 10
+        if score > best_score:
+            best = field
+            best_score = score
+    return best if best_score >= 7 else None
+
+
+def _generic_assertion_texts(expected_lower: str, page_model: dict | None) -> list[str]:
+    texts = []
+    if "error message" in expected_lower or "invalid" in expected_lower or "required" in expected_lower:
+        texts.extend(["error", "invalid", "required"])
+    if "success" in expected_lower or "submitted" in expected_lower or "saved" in expected_lower:
+        texts.extend(["success", "submitted", "saved"])
+    if "empty state" in expected_lower:
+        texts.extend(["no data", "no results", "empty"])
+    if "search result" in expected_lower or "results" in expected_lower:
+        texts.extend(["results", "result"])
+    if page_model and any(component.get("type") == "modal" for component in page_model.get("component_catalog", [])):
+        if "modal" in expected_lower or "dialog" in expected_lower:
+            texts.extend(["dialog", "modal"])
+    if page_model and any(component.get("type") == "toast" for component in page_model.get("component_catalog", [])):
+        if "toast" in expected_lower or "notification" in expected_lower or "snackbar" in expected_lower:
+            texts.extend(["toast", "notification", "saved"])
+    if page_model and any(component.get("type") == "consent_banner" for component in page_model.get("component_catalog", [])):
+        if "cookie" in expected_lower or "consent" in expected_lower or "privacy" in expected_lower:
+            texts.extend(["cookie", "consent", "privacy"])
+    if page_model and any(component.get("type") == "drawer" for component in page_model.get("component_catalog", [])):
+        if "drawer" in expected_lower or "side panel" in expected_lower or "sidebar" in expected_lower:
+            texts.extend(["drawer", "sidebar", "menu"])
+    if page_model and any(component.get("type") == "otp_verification" for component in page_model.get("component_catalog", [])):
+        if "otp" in expected_lower or "verification" in expected_lower:
+            texts.extend(["otp", "verification"])
+    if page_model and any(component.get("type") == "sso_login" for component in page_model.get("component_catalog", [])):
+        if "sso" in expected_lower or "single sign-on" in expected_lower:
+            texts.extend(["sign in", "continue with"])
+    if page_model and any(component.get("type") == "live_feed" for component in page_model.get("component_catalog", [])):
+        if "live" in expected_lower or "updated" in expected_lower or "refresh" in expected_lower:
+            texts.extend(["live", "updated", "refresh"])
+    deduped = []
+    seen = set()
+    for text in texts:
+        if text not in seen:
+            deduped.append(text)
+            seen.add(text)
+    return deduped[:4]
+
+
+def _slug_phrase(value: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "-", value.strip().lower())
+    return text.strip("-")

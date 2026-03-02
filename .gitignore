@@ -18,8 +18,14 @@ hasil/
 !README.md
 !instructions/
 
+# Auth/session files
+auth/auth_state.json
+auth/session_state.json
+!auth/sample_auth_state.json
+
 # OS/IDE metadata
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
