@@ -54,6 +54,24 @@ class DashboardAppTests(unittest.TestCase):
             json.dumps({"results": [{"id": "TC-1", "status": "passed"}]}),
             encoding="utf-8",
         )
+        (run_dir / "JSON" / "Execution_Network.json").write_text(
+            json.dumps(
+                {
+                    "network_entries": [
+                        {
+                            "id": "TC-1",
+                            "summary": {
+                                "request_count": 1,
+                                "response_count": 1,
+                                "failing_response_count": 0,
+                                "top_endpoints": [{"path": "/api/search", "hits": 1}],
+                            },
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
         (run_dir / "JSON" / "Execution_Learning.json").write_text(
             json.dumps(
                 {
@@ -74,6 +92,29 @@ class DashboardAppTests(unittest.TestCase):
             writer = csv.DictWriter(handle, fieldnames=["ID", "Title", "Automation", "Priority", "Severity", "Execution Status"])
             writer.writeheader()
             writer.writerow({"ID": "TC-1", "Title": "Demo", "Automation": "auto", "Priority": "P2", "Severity": "Medium", "Execution Status": "passed"})
+
+        run_two = self.results_dir / "demo_run_b"
+        (run_two / "JSON").mkdir(parents=True)
+        (run_two / "JSON" / "raw_scan_demo_b.json").write_text(
+            json.dumps({"title": "Demo Site B", "url": "https://example.com/alt", "headings": [{"text": "Alt"}], "buttons": [], "links": [], "sections": []}),
+            encoding="utf-8",
+        )
+        (run_two / "JSON" / "Page_Scope_demo_b.json").write_text(
+            json.dumps({"page_type": "detail", "confidence": 0.74, "scope_summary": "Detail page", "key_modules": ["Content"], "critical_user_flows": ["Read content"]}),
+            encoding="utf-8",
+        )
+        (run_two / "JSON" / "Normalized_Page_Model_demo_b.json").write_text(
+            json.dumps({"components": [{"type": "content"}], "component_catalog": [{"type": "content"}], "heuristic_scope": {"likely_page_type": "detail"}}),
+            encoding="utf-8",
+        )
+        (run_two / "JSON" / "Execution_Results.json").write_text(
+            json.dumps({"results": [{"id": "TC-1", "status": "failed"}]}),
+            encoding="utf-8",
+        )
+        with (run_two / "demo_b.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["ID", "Title", "Automation", "Priority", "Severity", "Execution Status"])
+            writer.writeheader()
+            writer.writerow({"ID": "TC-1", "Title": "Demo B", "Automation": "manual", "Priority": "P1", "Severity": "High", "Execution Status": "failed"})
 
         self.client = dashboard.app.test_client()
 
@@ -99,6 +140,15 @@ class DashboardAppTests(unittest.TestCase):
         self.assertIn(b"Global memory", home_response.data)
         self.assertIn(b"listing", runs_response.data)
 
+    def test_compare_and_benchmark_pages_render(self):
+        compare_response = self.client.get("/compare?left=demo_run&right=demo_run_b")
+        benchmark_response = self.client.get("/benchmarks")
+
+        self.assertEqual(compare_response.status_code, 200)
+        self.assertEqual(benchmark_response.status_code, 200)
+        self.assertIn(b"Run comparison", compare_response.data)
+        self.assertIn(b"Real run safety snapshot", benchmark_response.data)
+
     def test_api_runs_and_artifact_route(self):
         runs_response = self.client.get("/api/runs")
         artifact_response = self.client.get("/artifacts/demo_run/JSON/Page_Scope_demo.json")
@@ -107,7 +157,7 @@ class DashboardAppTests(unittest.TestCase):
             self.assertEqual(runs_response.status_code, 200)
             self.assertEqual(artifact_response.status_code, 200)
             payload = runs_response.get_json()
-            self.assertEqual(payload["runs"][0]["run_name"], "demo_run")
+            self.assertIn("demo_run", [item["run_name"] for item in payload["runs"]])
         finally:
             artifact_response.close()
 
@@ -158,6 +208,38 @@ class DashboardAppTests(unittest.TestCase):
         self.assertEqual(payload["job"]["payload"]["template_name"], "basic_smoke.txt")
         self.assertTrue(payload["job"]["payload"]["template_path"].endswith("basic_smoke.txt"))
 
+    def test_instruction_precheck_api_reports_conflicts(self):
+        response = self.client.post(
+            "/api/instruction-precheck",
+            data={
+                "template_name": "",
+                "instruction": "Ignore search but test search and only positive and only negative cases.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["precheck"]["is_valid"])
+        self.assertTrue(payload["precheck"]["contract"]["conflicts"])
+
+    def test_create_job_api_rejects_conflicting_instruction(self):
+        response = self.client.post(
+            "/api/jobs",
+            data={
+                "url": "https://example.com",
+                "instruction": "Ignore search but test search and only positive and only negative cases.",
+                "csv_sep": ",",
+                "crawl_limit": "3",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertIn("Instruksi konflik", payload["error"])
+        self.assertTrue(payload["precheck"]["contract"]["conflicts"])
+
     def test_retry_failed_job_api_returns_job_payload(self):
         def fake_create_retry_failed_job(run_name, executor_headed=False):
             return {
@@ -180,6 +262,25 @@ class DashboardAppTests(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["job"]["id"], "retry-demo")
         self.assertEqual(payload["job"]["payload"]["source_run_name"], "demo_run")
+
+    def test_delete_run_api_removes_run_directory(self):
+        target = self.results_dir / "demo_run_b"
+        self.assertTrue(target.exists())
+
+        response = self.client.post("/api/runs/demo_run_b/delete")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["deleted_run"], "demo_run_b")
+        self.assertFalse(target.exists())
+
+    def test_delete_run_api_blocks_invalid_path(self):
+        response = self.client.post("/api/runs/%2E%2E/delete")
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
 
     def test_run_feedback_api_persists_feedback_and_updates_learning(self):
         response = self.client.post(

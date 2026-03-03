@@ -1,4 +1,5 @@
 import csv
+import inspect
 import json
 import tempfile
 import unittest
@@ -132,11 +133,14 @@ class ScannerTests(unittest.TestCase):
 
     def test_extract_form_info_collects_rich_field_metadata(self):
         html = """
-        <form id="contact-form" method="post">
-          <label for="contact-phone">Phone Number</label>
-          <input id="contact-phone" name="username-username" type="tel" placeholder="Input phone number" autocomplete="tel" aria-label="Phone Number" required />
-          <button type="submit">Send</button>
-        </form>
+        <section id="contact-panel">
+          <h2>Contact Support</h2>
+          <form id="contact-form" method="post">
+            <label for="contact-phone">Phone Number</label>
+            <input id="contact-phone" name="username-username" type="tel" placeholder="Input phone number" autocomplete="tel" aria-label="Phone Number" required />
+            <button type="submit">Send</button>
+          </form>
+        </section>
         """
         soup = BeautifulSoup(html, "html.parser")
         form = soup.find("form")
@@ -149,6 +153,9 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(form_info["fields"][0]["name"], "username-username")
         self.assertTrue(form_info["fields"][0]["required"])
         self.assertFalse(form_info["fields"][0]["contenteditable"])
+        self.assertEqual(form_info["container_heading"], "Contact Support")
+        self.assertTrue(form_info["fields"][0]["container_hints"])
+        self.assertIn("section", form_info["fields"][0]["dom_path"])
 
     def test_extract_ui_components_detects_tabs_and_breadcrumb(self):
         html = """
@@ -219,6 +226,33 @@ class ScannerTests(unittest.TestCase):
         self.assertTrue(fingerprint["has_otp_flow"])
         self.assertTrue(fingerprint["has_sso"])
         self.assertTrue(fingerprint["has_live_updates"])
+
+    def test_build_section_graph_and_stateful_probe_configs(self):
+        html = """
+        <main id="app-main">
+          <section id="hero">
+            <h1>Hero Banner</h1>
+            <button>Get Started</button>
+          </section>
+          <section id="search-panel">
+            <h2>Search Area</h2>
+            <form><input type="search" name="q" /><button>Search</button></form>
+          </section>
+        </main>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+
+        graph = self.scanner._build_section_graph(soup)
+        probe_types = {item["type"] for item in self.scanner._stateful_probe_configs()}
+
+        self.assertGreaterEqual(len(graph["nodes"]), 2)
+        self.assertTrue(any(node["heading"] == "Hero Banner" for node in graph["nodes"]))
+        self.assertIn("combobox", probe_types)
+        self.assertIn("menu", probe_types)
+        self.assertIn("datepicker", probe_types)
+        self.assertIn("carousel", probe_types)
+        self.assertIn("async_drawer", probe_types)
+        self.assertIn("type: 'infinite_scroll'", inspect.getsource(self.scanner._discover_stateful_interactions))
 
 
 if __name__ == "__main__":

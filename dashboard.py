@@ -1,4 +1,5 @@
 import json
+import os
 import queue
 import re
 import shutil
@@ -14,9 +15,17 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request, send_file, url_for
 
 from core.artifacts import execution_results_path, json_artifact_path
-from core.dashboard_data import build_knowledge_snapshot, build_run_detail, list_runs, safe_run_artifact
+from core.dashboard_data import (
+    build_benchmark_snapshot,
+    build_knowledge_snapshot,
+    build_run_comparison,
+    build_run_detail,
+    list_runs,
+    safe_run_artifact,
+)
 from core.executor import CodeGenerator
 from core.feedback_bank import merge_human_feedback
+from core.guardrails import CONTEXT_RULES, compile_instruction_contract
 from core.instruction_templates import (
     ensure_instruction_templates,
     list_instruction_templates,
@@ -60,6 +69,47 @@ def _form_bool(value: str | None, default: bool = False) -> bool:
     if not normalized:
         return default
     return normalized in {"1", "true", "yes", "y", "on", "iya"}
+
+
+def _resolve_run_dir(run_name: str) -> Path:
+    candidate = (RESULT_DIR / run_name).resolve()
+    result_root = RESULT_DIR.resolve()
+    if not candidate.is_relative_to(result_root):
+        raise ValueError("Run path tidak valid.")
+    return candidate
+
+
+def _permissive_page_facts() -> dict:
+    facts = {}
+    for rule in CONTEXT_RULES.values():
+        requires = rule.get("requires")
+        requires_any = rule.get("requires_any", ())
+        if requires:
+            facts[requires] = True
+        for item in requires_any:
+            facts[item] = True
+    return facts
+
+
+def _build_instruction_precheck(template_name: str, instruction: str) -> dict:
+    template_name = str(template_name or "").strip()
+    instruction = str(instruction or "").strip()
+    template = None
+    template_content = ""
+    if template_name:
+        template = load_instruction_template(template_name, INSTRUCTIONS_DIR)
+        template_content = str(template.get("content", "")).strip()
+
+    combined_parts = [part for part in (template_content, instruction) if part]
+    combined_instruction = "\n\n".join(combined_parts).strip()
+    contract = compile_instruction_contract(combined_instruction, _permissive_page_facts())
+    return {
+        "template_name": template_name,
+        "template_used": bool(template_name),
+        "combined_instruction": combined_instruction,
+        "contract": contract,
+        "is_valid": not contract.get("conflicts"),
+    }
 
 
 def create_job(payload: dict) -> dict:
@@ -311,6 +361,7 @@ def dashboard_metrics() -> dict:
         "cases": sum(item.get("total_cases", 0) for item in runs),
         "videos": sum(item.get("video_count", 0) for item in runs),
         "failed": sum(item.get("status_counts", {}).get("failed", 0) for item in runs),
+        "alerts": sum(item.get("alert_count", 0) for item in runs),
     }
     return totals
 
@@ -321,6 +372,7 @@ def home():
     active_jobs = [_get_job(job_id) for job_id in list(jobs.keys())[-8:]][::-1]
     templates = list_instruction_templates(INSTRUCTIONS_DIR)
     knowledge_snapshot = build_knowledge_snapshot(profiles_dir=PROFILES_DIR)
+    benchmark_snapshot = build_benchmark_snapshot(RESULT_DIR, limit=6)
     return render_template(
         "dashboard.html",
         runs=runs,
@@ -328,21 +380,43 @@ def home():
         metrics=dashboard_metrics(),
         templates=templates,
         knowledge_snapshot=knowledge_snapshot,
+        benchmark_snapshot=benchmark_snapshot,
     )
 
 
 @app.get("/runs")
 def runs_page():
-    return render_template("runs.html", runs=list_runs(RESULT_DIR), metrics=dashboard_metrics())
+    runs = list_runs(RESULT_DIR)
+    return render_template("runs.html", runs=runs, metrics=dashboard_metrics())
 
 
 @app.get("/runs/<run_name>")
 def run_detail(run_name: str):
-    run_dir = RESULT_DIR / run_name
+    try:
+        run_dir = _resolve_run_dir(run_name)
+    except ValueError:
+        abort(404)
     if not run_dir.exists():
         abort(404)
     detail = build_run_detail(run_dir)
     return render_template("run_detail.html", run=detail)
+
+
+@app.get("/compare")
+def compare_runs():
+    left = request.args.get("left", "").strip()
+    right = request.args.get("right", "").strip()
+    runs = list_runs(RESULT_DIR)
+    comparison = None
+    if left and right:
+        comparison = build_run_comparison(left, right, RESULT_DIR)
+    return render_template("compare.html", runs=runs, comparison=comparison, metrics=dashboard_metrics(), left=left, right=right)
+
+
+@app.get("/benchmarks")
+def benchmark_page():
+    benchmark_snapshot = build_benchmark_snapshot(RESULT_DIR, limit=10)
+    return render_template("benchmarks.html", benchmark=benchmark_snapshot, metrics=dashboard_metrics())
 
 
 @app.get("/artifacts/<run_name>/<path:relative_path>")
@@ -363,6 +437,15 @@ def create_job_api():
             template_path = str(resolve_instruction_template(template_name, INSTRUCTIONS_DIR))
         except FileNotFoundError:
             return jsonify({"ok": False, "error": "Template tidak ditemukan."}), 404
+    precheck = _build_instruction_precheck(template_name, request.form.get("instruction", ""))
+    if not precheck["is_valid"]:
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Instruksi konflik. Perbaiki dulu sebelum launch job.",
+                "precheck": precheck,
+            }
+        ), 400
     payload = {
         "url": request.form.get("url", "").strip(),
         "instruction": request.form.get("instruction", "").strip(),
@@ -381,6 +464,16 @@ def create_job_api():
     return jsonify({"ok": True, "job": job, "redirect": url_for("home")})
 
 
+@app.post("/api/instruction-precheck")
+def instruction_precheck_api():
+    template_name = request.form.get("template_name", "").strip()
+    try:
+        precheck = _build_instruction_precheck(template_name, request.form.get("instruction", ""))
+    except FileNotFoundError:
+        return jsonify({"ok": False, "error": "Template tidak ditemukan."}), 404
+    return jsonify({"ok": True, "precheck": precheck})
+
+
 @app.post("/api/runs/<run_name>/retry-failed")
 def retry_failed_job_api(run_name: str):
     executor_headed = _form_bool(request.form.get("executor_headed"), default=False)
@@ -391,6 +484,20 @@ def retry_failed_job_api(run_name: str):
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     return jsonify({"ok": True, "job": job, "redirect": url_for("run_detail", run_name=job["run_name"])})
+
+
+@app.post("/api/runs/<run_name>/delete")
+def delete_run_api(run_name: str):
+    try:
+        run_dir = _resolve_run_dir(run_name)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    if not run_dir.exists() or not run_dir.is_dir():
+        return jsonify({"ok": False, "error": "Run tidak ditemukan."}), 404
+
+    shutil.rmtree(run_dir)
+    return jsonify({"ok": True, "deleted_run": run_name})
 
 
 @app.post("/api/runs/<run_name>/feedback")
@@ -528,4 +635,10 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    local_debug = os.getenv("QA_AGENT_DASHBOARD_DEBUG", "1").strip().lower() not in {"0", "false", "no"}
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=local_debug,
+        use_reloader=local_debug,
+    )

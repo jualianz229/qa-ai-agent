@@ -23,6 +23,11 @@ auth/auth_state.json
 auth/session_state.json
 !auth/sample_auth_state.json
 
+# Runtime knowledge/memory banks
+site_profiles/case_memory/
+site_profiles/learned/
+site_profiles/flaky/
+
 # OS/IDE metadata
 .DS_Store
 Thumbs.db

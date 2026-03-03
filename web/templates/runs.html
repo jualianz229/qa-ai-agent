@@ -13,6 +13,30 @@
       <span>{{ metrics.videos }} videos</span>
     </div>
   </div>
+  <form class="filter-toolbar" action="{{ url_for('compare_runs') }}" method="get">
+    <label class="filter-field">
+      <span>Compare left</span>
+      <select name="left">
+        <option value="">Select run</option>
+        {% for run in runs %}
+          <option value="{{ run.run_name }}">{{ run.run_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="filter-field">
+      <span>Compare right</span>
+      <select name="right">
+        <option value="">Select run</option>
+        {% for run in runs %}
+          <option value="{{ run.run_name }}">{{ run.run_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="filter-field">
+      <span>Action</span>
+      <button class="primary-button" type="submit">Compare runs</button>
+    </div>
+  </form>
   <div class="table-shell">
     <table class="data-table">
       <thead>
@@ -23,27 +47,70 @@
           <th>Passed</th>
           <th>Failed</th>
           <th>Videos</th>
+          <th>Network</th>
           <th>Confidence</th>
+          <th>Compare</th>
+          <th>Delete</th>
         </tr>
       </thead>
       <tbody>
         {% for run in runs %}
-          <tr>
+          <tr data-run-row="{{ run.run_name }}">
             <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.run_name) }}">{{ run.run_name }}</a></td>
             <td>{{ run.page_type or "-" }}</td>
             <td>{{ run.total_cases }}</td>
             <td>{{ run.status_counts.passed or 0 }}</td>
             <td>{{ run.status_counts.failed or 0 }}</td>
             <td>{{ run.video_count }}</td>
-            <td><span class="confidence" title="AI confidence">{{ run.confidence_score }}</span></td>
+            <td>{{ run.network_summary.request_count if run.network_summary else 0 }}</td>
+            <td><span class="confidence" title="{{ run.confidence_explanation|join(' | ') if run.confidence_explanation else 'AI confidence' }}">{{ run.confidence_score }}</span></td>
+            <td><a class="inline-link" href="{{ url_for('compare_runs', left=run.run_name, right=(runs[0].run_name if runs and runs[0].run_name != run.run_name else (runs[1].run_name if runs|length > 1 else run.run_name))) }}">Compare</a></td>
+            <td>
+              <button
+                class="danger-button"
+                type="button"
+                data-delete-run="{{ run.run_name }}"
+              >
+                Delete
+              </button>
+            </td>
           </tr>
         {% else %}
           <tr>
-            <td colspan="7">No runs found.</td>
+            <td colspan="10">No runs found.</td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </section>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const buttons = document.querySelectorAll("[data-delete-run]");
+    for (const button of buttons) {
+      button.addEventListener("click", async () => {
+        const runName = button.getAttribute("data-delete-run");
+        if (!runName) return;
+        const confirmed = window.confirm(`Hapus run '${runName}'? Semua artifact di folder Result akan ikut terhapus.`);
+        if (!confirmed) return;
+        button.disabled = true;
+        try {
+          const response = await fetch(`/api/runs/${encodeURIComponent(runName)}/delete`, {
+            method: "POST",
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.error || "Gagal menghapus run.");
+          }
+          const row = document.querySelector(`[data-run-row="${CSS.escape(runName)}"]`);
+          if (row) row.remove();
+          window.location.reload();
+        } catch (error) {
+          window.alert(error.message || "Gagal menghapus run.");
+          button.disabled = false;
+        }
+      });
+    }
+  });
+</script>
 {% endblock %}

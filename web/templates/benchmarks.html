@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Benchmarks | QA Agent{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Benchmark</p>
+      <h1>Real run safety snapshot</h1>
+    </div>
+    <div class="metric-inline">
+      <span>{{ benchmark.total_cases or 0 }} sampled runs</span>
+      <span>{{ metrics.runs }} total runs</span>
+    </div>
+  </div>
+  <div class="metric-grid">
+    <article class="metric-card metric-card-info">
+      <span>Average grounding</span>
+      <strong>{{ ((benchmark.average_grounding_coverage or 0) * 100)|round(0)|int }} / 100</strong>
+    </article>
+    <article class="metric-card metric-card-info">
+      <span>Average heuristic fit</span>
+      <strong>{{ ((benchmark.average_heuristic_alignment or 0) * 100)|round(0)|int }} / 100</strong>
+    </article>
+    <article class="metric-card metric-card-info">
+      <span>Average confidence</span>
+      <strong>{{ ((benchmark.average_confidence or 0) * 100)|round(0)|int }} / 100</strong>
+    </article>
+    <article class="metric-card metric-card-info">
+      <span>Average source trust</span>
+      <strong>{{ ((benchmark.average_source_trust or 0) * 100)|round(0)|int }} / 100</strong>
+    </article>
+    <article class="metric-card metric-card-info">
+      <span>Average stability</span>
+      <strong>{{ ((benchmark.average_stability or 0) * 100)|round(0)|int }} / 100</strong>
+    </article>
+    <article class="metric-card">
+      <span>Auto / Semi / Manual</span>
+      <strong>{{ benchmark.total_auto_cases or 0 }} / {{ benchmark.total_semi_auto_cases or 0 }} / {{ benchmark.total_manual_cases or 0 }}</strong>
+    </article>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Clusters</p>
+      <h2>Observed page patterns</h2>
+    </div>
+  </div>
+  <div class="artifact-groups">
+    {% for key in benchmark.cluster_keys %}
+      <span class="panel-badge">{{ key }}</span>
+    {% else %}
+      <p class="empty-state">No cluster keys observed yet.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Benchmark cases</p>
+      <h2>Sampled run breakdown</h2>
+    </div>
+  </div>
+  <div class="table-shell">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Run</th>
+          <th>Page type</th>
+          <th>Scope valid</th>
+          <th>Plan valid</th>
+          <th>Grounding</th>
+          <th>Heuristic fit</th>
+          <th>Confidence</th>
+          <th>Source trust</th>
+          <th>Stability</th>
+          <th>Rejected plans</th>
+          <th>Weak grounding</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in benchmark.results %}
+          <tr>
+            <td>{{ item.name }}</td>
+            <td>{{ item.page_type or item.heuristic_page_type or "-" }}</td>
+            <td>{{ "Yes" if item.scope_valid else "No" }}</td>
+            <td>{{ "Yes" if item.plan_valid else "No" }}</td>
+            <td>{{ (item.grounding_coverage * 100)|round(0)|int }} / 100</td>
+            <td>{{ (item.heuristic_alignment * 100)|round(0)|int }} / 100</td>
+            <td>{{ (item.confidence_score * 100)|round(0)|int }} / 100</td>
+            <td>{{ (item.source_trust * 100)|round(0)|int }} / 100</td>
+            <td>{{ (item.stability * 100)|round(0)|int }} / 100</td>
+            <td>{{ item.rejected_plan_count }}</td>
+            <td>{{ item.weak_grounding_items|length }}</td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="11">No benchmarkable runs found yet.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

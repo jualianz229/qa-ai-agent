@@ -2,6 +2,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from core.ontology import ACTION_ONTOLOGY, COMPONENT_ONTOLOGY, FIELD_ONTOLOGY
 from core.site_profiles import get_failure_memory, get_ranked_selector_candidates
@@ -20,6 +21,7 @@ class PageModelBuilder:
         actions = self._build_actions(components, form_catalog, component_catalog)
         entities = self._build_entities(form_catalog, component_catalog)
         navigation_graph = self._build_navigation_graph()
+        section_graph = self._build_section_graph()
         state_graph = self._build_state_graph(components, actions)
         possible_flows = self._build_possible_flows(components, actions, component_catalog)
         page_facts = self._derive_page_facts(components, fingerprint)
@@ -32,10 +34,13 @@ class PageModelBuilder:
                 "title": self.page_info.get("title", ""),
                 "metadata": self.page_info.get("metadata", {}),
             },
+            "api_endpoints": self.page_info.get("apis", []),
             "components": components,
             "actions": actions,
             "entities": entities,
             "content_blocks": self.page_info.get("sections", []),
+            "section_graph": section_graph,
+            "section_catalog": section_graph.get("nodes", []),
             "navigation_graph": navigation_graph,
             "state_graph": state_graph,
             "possible_flows": possible_flows,
@@ -197,6 +202,48 @@ class PageModelBuilder:
                 nodes.append(page_url)
         return {"nodes": nodes, "edges": edges}
 
+    def _build_section_graph(self) -> dict:
+        raw_graph = self.page_info.get("section_graph", {}) if isinstance(self.page_info.get("section_graph", {}), dict) else {}
+        if raw_graph.get("nodes"):
+            nodes = []
+            for node in raw_graph.get("nodes", [])[:24]:
+                nodes.append(
+                    {
+                        "block_id": str(node.get("block_id", "")).strip(),
+                        "tag": str(node.get("tag", "")).strip(),
+                        "heading": str(node.get("heading", "")).strip(),
+                        "text": str(node.get("text", ""))[:220],
+                        "dom_path": str(node.get("dom_path", ""))[:180],
+                        "parent_block_id": str(node.get("parent_block_id", "")).strip(),
+                        "link_count": int(node.get("link_count", 0) or 0),
+                        "button_count": int(node.get("button_count", 0) or 0),
+                        "field_count": int(node.get("field_count", 0) or 0),
+                    }
+                )
+            return {
+                "nodes": nodes,
+                "edges": list(raw_graph.get("edges", []))[:32],
+            }
+
+        nodes = []
+        edges = []
+        for index, section in enumerate(self.page_info.get("sections", [])[:12], start=1):
+            block_id = f"block_{index}"
+            nodes.append(
+                {
+                    "block_id": block_id,
+                    "tag": "section",
+                    "heading": str(section.get("heading", "")).strip(),
+                    "text": str(section.get("text", ""))[:220],
+                    "dom_path": "",
+                    "parent_block_id": "",
+                    "link_count": 0,
+                    "button_count": 0,
+                    "field_count": 0,
+                }
+            )
+        return {"nodes": nodes, "edges": edges}
+
     def _build_state_graph(self, components: list[dict], actions: list[dict]) -> dict:
         states = [{"id": "landing", "label": "Initial page load"}]
         transitions = []
@@ -355,6 +402,7 @@ class PageModelBuilder:
             "chart": bool(fingerprint.get("has_chart") or "chart" in component_types),
             "spa_shell": bool(fingerprint.get("has_spa_shell") or "spa_shell" in component_types),
             "graphql": bool(fingerprint.get("has_graphql") or "graphql_surface" in component_types),
+            "api_surface": bool(self.page_info.get("apis") or fingerprint.get("has_graphql") or "graphql_surface" in component_types),
             "websocket": bool(fingerprint.get("has_websocket") or "live_feed" in component_types),
             "live_updates": bool(fingerprint.get("has_live_updates") or "live_feed" in component_types),
             "otp_flow": bool(fingerprint.get("has_otp_flow") or "otp_verification" in component_types),
@@ -484,10 +532,13 @@ class PageModelBuilder:
                     "label": label,
                     "aliases": aliases,
                     "items": list(raw.get("items", []))[:10],
+                    "container_hints": list(raw.get("container_hints", []))[:6],
+                    "dom_path": str(raw.get("dom_path", ""))[:180],
+                    "selector_candidates": list(raw.get("selector_candidates", []))[:10],
                     "details": {
                         key: value
                         for key, value in raw.items()
-                        if key not in {"type", "label", "items"}
+                        if key not in {"type", "label", "items", "container_hints", "dom_path", "selector_candidates"}
                     },
                 }
             )
@@ -501,8 +552,11 @@ class PageModelBuilder:
                         "type": component_type,
                         "label": str(component.get("label", "")).strip(),
                         "aliases": self._build_component_aliases(component),
+                        "container_hints": list(component.get("container_hints", []))[:6],
+                        "dom_path": str(component.get("dom_path", ""))[:180],
+                        "selector_candidates": list(component.get("selector_candidates", []))[:10],
                         "items": [],
-                        "details": {k: v for k, v in component.items() if k not in {"type", "label"}},
+                        "details": {k: v for k, v in component.items() if k not in {"type", "label", "container_hints", "dom_path", "selector_candidates"}},
                     }
                 )
         return catalog
@@ -522,6 +576,10 @@ class PageModelBuilder:
                 "method": str(form.get("method", "get")).strip().lower(),
                 "submit_texts": list(form.get("submit_texts", []))[:6],
                 "context_text": str(form.get("context_text", "")).strip(),
+                "container_heading": str(form.get("container_heading", "")).strip(),
+                "container_text": str(form.get("container_text", "")).strip(),
+                "dom_path": str(form.get("dom_path", "")).strip(),
+                "container_hints": list(form.get("container_hints", []))[:6],
                 "fields": [],
             }
             for field in form.get("fields", [])[:20]:
@@ -538,6 +596,10 @@ class PageModelBuilder:
                 "method": "get",
                 "submit_texts": [],
                 "context_text": "Standalone controls detected outside forms",
+                "container_heading": "",
+                "container_text": "Standalone controls detected outside forms",
+                "dom_path": "",
+                "container_hints": ["Standalone controls"],
                 "fields": [],
             }
             for field in standalone_controls[:20]:
@@ -553,6 +615,7 @@ class PageModelBuilder:
         field_counts[base_key] = field_counts.get(base_key, 0) + 1
         suffix = f"_{field_counts[base_key]}" if field_counts[base_key] > 1 else ""
         selector_candidates = self._build_selector_candidates(field, semantic_type)
+        learned_path_hints = self._learned_field_selectors(field, semantic_type)[:6]
         return {
             "field_key": f"{base_key}{suffix}",
             "form_key": form_entry.get("form_key", ""),
@@ -576,6 +639,20 @@ class PageModelBuilder:
             "required": bool(field.get("required", False)),
             "aliases": aliases,
             "selector_candidates": selector_candidates,
+            "learned_path_hints": learned_path_hints,
+            "container_hints": list(dict.fromkeys(
+                [item for item in [
+                    form_entry.get("label", ""),
+                    form_entry.get("context_text", ""),
+                    field.get("container_heading", ""),
+                    field.get("container_text", ""),
+                    field.get("context_text", ""),
+                    *form_entry.get("container_hints", []),
+                    *field.get("container_hints", []),
+                ] if str(item or "").strip()]
+            ))[:6],
+            "nearby_texts": list(field.get("nearby_texts", []))[:6],
+            "dom_path": str(field.get("dom_path", "")).strip(),
             "options": list(field.get("options", []))[:12],
             "context_text": field.get("context_text", ""),
         }
@@ -722,7 +799,6 @@ class PageModelBuilder:
 
     def _learned_field_selectors(self, field: dict, semantic_type: str) -> list[str]:
         learning = self.page_info.get("site_profile", {}).get("learning", {})
-        selector_map = learning.get("field_selectors", {})
         keys = [
             semantic_type,
             field.get("label", ""),
@@ -734,8 +810,12 @@ class PageModelBuilder:
         for key in keys:
             normalized = _normalize_learning_key(key)
             if normalized:
-                selectors.extend(selector_map.get(normalized, []))
-        return selectors[:8]
+                selectors.extend(get_ranked_selector_candidates(learning, "field_selectors", normalized, limit=4))
+                for failure in get_failure_memory(learning, "field_selectors", normalized, limit=2):
+                    failed_selector = str(failure.get("selector", "")).strip()
+                    if failed_selector and failed_selector in selectors:
+                        selectors.remove(failed_selector)
+        return _merge_unique_list(selectors)[:8]
 
     def _field_action_type(self, field: dict) -> str:
         widget = str(field.get("widget", "")).lower()
@@ -774,6 +854,7 @@ def save_json_artifact(data: dict, output_path: Path) -> Path:
 def build_execution_plan(test_cases: list[dict], page_model: dict, base_url: str, site_profile: dict | None = None) -> dict:
     site_profile = site_profile or page_model.get("site_profile", {})
     execution_settings = _build_execution_settings(page_model, site_profile)
+    network_policy = _build_network_policy(page_model, base_url, site_profile)
     plans = []
     for case in test_cases:
         steps = str(case.get("Steps to Reproduce", ""))
@@ -797,6 +878,9 @@ def build_execution_plan(test_cases: list[dict], page_model: dict, base_url: str
             "session_strategy": _build_session_strategy(page_model, case, site_profile),
             "orchestration": _build_orchestration(page_model, automation, checkpoints),
             "interaction_hints": _build_interaction_hints(page_model, actions, execution_settings),
+            "expected_request_map": _build_expected_request_map(page_model, case, base_url, network_policy),
+            "scenario_grounding": dict(case.get("_grounding", {})),
+            "scenario_alignment": dict(case.get("_task_alignment", {})),
             "source_case": {
                 "category": str(case.get("Category", "")).strip(),
                 "test_type": str(case.get("Test Type", "")).strip(),
@@ -804,6 +888,7 @@ def build_execution_plan(test_cases: list[dict], page_model: dict, base_url: str
             },
         }
         plan["grounding_summary"] = _build_grounding_summary(plan)
+        plan["evidence_trace"] = _build_plan_evidence_trace(plan)
         plans.append(plan)
     return {
         "version": 3,
@@ -814,6 +899,7 @@ def build_execution_plan(test_cases: list[dict], page_model: dict, base_url: str
         "runtime_observer": page_model.get("runtime_observer", {}),
         "page_facts": page_model.get("page_facts", {}),
         "site_profile": site_profile,
+        "network_policy": network_policy,
         "settings": execution_settings,
         "plans": plans,
     }
@@ -928,6 +1014,63 @@ def _build_interaction_hints(page_model: dict, actions: list[dict], settings: di
         "expects_route_change": has_clicks and bool(page_facts.get("navigation") or page_facts.get("spa_shell")),
         "prefers_scroll_after_click": list_like,
         "watch_live_updates": bool(page_facts.get("live_updates")),
+    }
+
+
+def _build_network_policy(page_model: dict, base_url: str, site_profile: dict | None) -> dict:
+    site_profile = site_profile or {}
+    network_profile = site_profile.get("network", {})
+    base_host = re.sub(r"^www\.", "", urlparse(base_url).netloc.strip().lower()) if base_url else ""
+    api_endpoints = [str(item or "").strip() for item in page_model.get("api_endpoints", []) if str(item or "").strip()]
+    allowed_hosts = []
+    for endpoint in api_endpoints[:12]:
+        match = re.search(r"^https?://([^/]+)", endpoint, flags=re.IGNORECASE)
+        host = re.sub(r"^www\.", "", match.group(1).strip().lower()) if match else base_host
+        if host and host not in allowed_hosts:
+            allowed_hosts.append(host)
+    for host in network_profile.get("allowed_hosts", []):
+        normalized = re.sub(r"^www\.", "", str(host or "").strip().lower())
+        if normalized and normalized not in allowed_hosts:
+            allowed_hosts.append(normalized)
+    if base_host and base_host not in allowed_hosts:
+        allowed_hosts.insert(0, base_host)
+    endpoint_tokens = []
+    for endpoint in api_endpoints[:12]:
+        token = endpoint.split("?", 1)[0].strip()
+        if token and token not in endpoint_tokens:
+            endpoint_tokens.append(token)
+    return {
+        "base_host": base_host,
+        "allowed_hosts": allowed_hosts[:12],
+        "allowed_endpoint_tokens": endpoint_tokens[:12],
+        "cross_origin_mode": str(network_profile.get("cross_origin_mode", "same-origin")).strip().lower() or "same-origin",
+        "graphql_error_keys": list(network_profile.get("graphql_error_keys", ["errors", "error", "extensions"]))[:6],
+    }
+
+
+def _build_expected_request_map(page_model: dict, case: dict, base_url: str, network_policy: dict) -> dict:
+    text = " ".join(str(case.get(key, "")) for key in ("Title", "Steps to Reproduce", "Expected Result")).lower()
+    api_endpoints = [str(item or "").strip() for item in page_model.get("api_endpoints", []) if str(item or "").strip()]
+    expected_endpoints = []
+    for endpoint in api_endpoints[:12]:
+        endpoint_lower = endpoint.lower()
+        if any(token in endpoint_lower for token in ("search", "query")) and any(token in text for token in ("search", "query", "find", "keyword")):
+            expected_endpoints.append(endpoint)
+        elif any(token in endpoint_lower for token in ("login", "auth", "session")) and any(token in text for token in ("login", "auth", "password", "username", "sign in")):
+            expected_endpoints.append(endpoint)
+        elif any(token in endpoint_lower for token in ("upload", "file", "media")) and any(token in text for token in ("upload", "file", "attachment")):
+            expected_endpoints.append(endpoint)
+        elif any(token in endpoint_lower for token in ("submit", "contact", "save", "apply")) and any(token in text for token in ("submit", "send", "contact", "save", "apply", "phone number")):
+            expected_endpoints.append(endpoint)
+        elif "graphql" in endpoint_lower and "graphql" in text:
+            expected_endpoints.append(endpoint)
+    if not expected_endpoints:
+        expected_endpoints = api_endpoints[:4]
+    return {
+        "same_origin_required": network_policy.get("cross_origin_mode", "same-origin") == "same-origin",
+        "allowed_hosts": list(network_policy.get("allowed_hosts", []))[:8],
+        "expected_endpoints": expected_endpoints[:8],
+        "graphql_expected": "graphql" in text or any("graphql" in endpoint.lower() for endpoint in expected_endpoints[:4]),
     }
 
 
@@ -1047,6 +1190,18 @@ def _extract_assertions(expected: str, page_model: dict | None = None) -> list[d
     quoted = re.findall(r"'([^']+)'|\"([^\"]+)\"", expected)
     quoted_values = [a or b for a, b in quoted if a or b]
     expected_lower = expected.lower()
+    explicit_endpoints = re.findall(r"https?://[^\s'\"]+|/[a-zA-Z0-9\-_./?=&]+", expected)
+    if any(term in expected_lower for term in ("api", "request", "response", "endpoint", "network", "graphql", "fetch", "xhr")):
+        endpoint = explicit_endpoints[0] if explicit_endpoints else _default_network_target(page_model, expected_lower)
+        assertions.append(_ground_assertion({"type": "assert_network_seen", "value": endpoint, "source_text": expected}, page_model))
+        if any(term in expected_lower for term in ("200", "ok", "success response", "successful response", "without error", "status code")):
+            assertions.append(_ground_assertion({"type": "assert_network_status_ok", "value": endpoint, "source_text": expected}, page_model))
+        if "graphql" in expected_lower:
+            assertions.append(_ground_assertion({"type": "assert_graphql_ok", "value": endpoint, "source_text": expected}, page_model))
+    if any(term in expected_lower for term in ("same-origin", "same origin", "third-party", "third party", "cross-origin", "cross origin", "allowlist", "allow-list")):
+        assertions.append(_ground_assertion({"type": "assert_cross_origin_safe", "value": "same-origin", "source_text": expected}, page_model))
+        if any(term in expected_lower for term in ("allowlist", "allow-list", "approved endpoint", "approved domain")):
+            assertions.append(_ground_assertion({"type": "assert_endpoint_allowlist", "value": "allowlist", "source_text": expected}, page_model))
     if "url" in expected_lower or "redirect" in expected_lower or "open" in expected_lower or "navigate" in expected_lower:
         path_match = re.search(r"/[a-zA-Z0-9\-_/?=&]+", expected)
         if path_match:
@@ -1090,6 +1245,10 @@ def _enrich_field_action(action: dict, page_model: dict | None) -> dict:
     enriched["semantic_label"] = match.get("semantic_label", "")
     enriched["aliases"] = match.get("aliases", [])
     enriched["selector_candidates"] = _merge_unique_list(match.get("selector_candidates", []), _learned_field_selectors(match, page_model))
+    enriched["learned_path_hints"] = match.get("learned_path_hints", [])
+    enriched["container_hints"] = match.get("container_hints", [])
+    enriched["nearby_texts"] = match.get("nearby_texts", [])
+    enriched["dom_path"] = match.get("dom_path", "")
     enriched["input_kind"] = match.get("widget", "") or match.get("type", "")
     return enriched
 
@@ -1150,20 +1309,38 @@ def _ground_action(action: dict, page_model: dict | None) -> dict:
             )
     elif action_type in {"click", "hover", "dismiss", "scroll", "wait_for_text"}:
         refs.extend(_match_interaction_refs(action, page_model))
+        component_match = _match_component_reference(action.get("target", ""), page_model)
+        if component_match:
+            enriched["aliases"] = component_match.get("aliases", [])
+            enriched["container_hints"] = component_match.get("container_hints", [])
+            enriched["nearby_texts"] = component_match.get("items", [])[:6]
+            enriched["dom_path"] = component_match.get("dom_path", "")
+            enriched["learned_path_hints"] = _learned_action_selectors(action.get("target", ""), page_model)
+            enriched["selector_candidates"] = _merge_unique_list(
+                component_match.get("selector_candidates", []),
+                enriched.get("selector_candidates", []),
+                enriched.get("learned_path_hints", []),
+            )
 
     if action_type in {"open_url", "inspect"} and not refs:
         refs.append({"source_type": "page", "source_key": "page_identity", "source_label": "Page identity", "matched_text": action.get("target", ""), "score": 10})
 
     if refs:
         enriched["grounding_refs"] = refs[:6]
+        enriched["evidence_refs"] = _build_step_evidence_refs(refs)
+        enriched["evidence_summary"] = _build_evidence_summary(refs)
         enriched["grounded"] = True
         enriched["grounding_confidence"] = round(min(1.0, max(ref.get("score", 0) for ref in refs) / 14), 2)
+        enriched["fact_coverage_score"] = _reference_coverage_score(refs, expected_types={"field", "submit_control"} if action_type in {"fill", "select", "upload"} else {"component", "submit_control", "heading", "button", "link", "field", "page"})
         if action_type in {"click", "hover", "dismiss"} and not enriched.get("selector_candidates"):
             enriched["selector_candidates"] = _learned_action_selectors(action.get("target", ""), page_model)
     else:
         enriched["grounding_refs"] = []
+        enriched["evidence_refs"] = []
+        enriched["evidence_summary"] = ""
         enriched["grounded"] = False
         enriched["grounding_confidence"] = 0.0
+        enriched["fact_coverage_score"] = 0.0
     return enriched
 
 
@@ -1225,16 +1402,146 @@ def _ground_assertion(assertion: dict, page_model: dict | None) -> dict:
                     "score": 8,
                 }
             )
+    elif assertion_type in {"assert_network_seen", "assert_network_status_ok", "assert_graphql_ok", "assert_endpoint_allowlist", "assert_cross_origin_safe"}:
+        api_endpoints = [str(item or "") for item in page_model.get("api_endpoints", [])]
+        candidate = str(value or "").strip().lower()
+        if candidate:
+            for endpoint in api_endpoints[:8]:
+                endpoint_lower = endpoint.lower()
+                if candidate in endpoint_lower or endpoint_lower.endswith(candidate):
+                    refs.append(
+                        {
+                            "source_type": "api_endpoint",
+                            "source_key": endpoint,
+                            "source_label": endpoint,
+                            "matched_text": value,
+                            "score": 10,
+                        }
+                    )
+        if not refs and api_endpoints:
+            refs.append(
+                {
+                    "source_type": "page_fact",
+                    "source_key": "api_surface",
+                    "source_label": api_endpoints[0][:140],
+                    "matched_text": value or "api",
+                    "score": 8,
+                }
+            )
+        if assertion_type in {"assert_endpoint_allowlist", "assert_cross_origin_safe"}:
+            refs.append(
+                {
+                    "source_type": "page_fact",
+                    "source_key": "network_policy",
+                    "source_label": "Network allowlist and cross-origin policy",
+                    "matched_text": value or "network policy",
+                    "score": 8,
+                }
+            )
+        if assertion_type == "assert_graphql_ok":
+            refs.append(
+                {
+                    "source_type": "page_fact",
+                    "source_key": "graphql_surface",
+                    "source_label": "GraphQL response surface",
+                    "matched_text": value or "graphql",
+                    "score": 9,
+                }
+            )
 
     if refs:
         enriched["grounding_refs"] = refs[:6]
+        enriched["evidence_refs"] = _build_step_evidence_refs(refs)
+        enriched["evidence_summary"] = _build_evidence_summary(refs)
         enriched["grounded"] = True
         enriched["grounding_confidence"] = round(min(1.0, max(ref.get("score", 0) for ref in refs) / 12), 2)
+        enriched["fact_coverage_score"] = _reference_coverage_score(
+            refs,
+            expected_types={"component", "heading", "button", "link", "field", "page_identity", "page_fact", "state", "api_endpoint"},
+        )
     else:
         enriched["grounding_refs"] = []
+        enriched["evidence_refs"] = []
+        enriched["evidence_summary"] = ""
         enriched["grounded"] = False
         enriched["grounding_confidence"] = 0.0
+        enriched["fact_coverage_score"] = 0.0
     return enriched
+
+
+def _build_step_evidence_refs(refs: list[dict]) -> list[dict]:
+    rows = []
+    for ref in refs[:6]:
+        rows.append(
+            {
+                "kind": str(ref.get("source_type", "")).strip(),
+                "key": str(ref.get("source_key", "")).strip(),
+                "label": str(ref.get("source_label", "")).strip(),
+                "matched_text": str(ref.get("matched_text", "")).strip(),
+                "score": float(ref.get("score", 0) or 0),
+            }
+        )
+    return rows
+
+
+def _build_evidence_summary(refs: list[dict]) -> str:
+    parts = []
+    for ref in refs[:4]:
+        label = str(ref.get("source_label", "")).strip() or str(ref.get("source_key", "")).strip()
+        kind = str(ref.get("source_type", "")).strip()
+        if label and kind:
+            parts.append(f"{kind}:{label}")
+    return "; ".join(parts)
+
+
+def _build_plan_evidence_trace(plan: dict) -> dict:
+    actions = list(plan.get("pre_actions", [])) + list(plan.get("actions", []))
+    assertions = list(plan.get("assertions", []))
+    trace = {
+        "grounded_action_count": sum(1 for item in actions if item.get("grounded")),
+        "grounded_assertion_count": sum(1 for item in assertions if item.get("grounded")),
+        "average_action_fact_coverage": round(
+            sum(float(item.get("fact_coverage_score", 0.0) or 0.0) for item in actions) / len(actions),
+            2,
+        ) if actions else 0.0,
+        "average_assertion_fact_coverage": round(
+            sum(float(item.get("fact_coverage_score", 0.0) or 0.0) for item in assertions) / len(assertions),
+            2,
+        ) if assertions else 0.0,
+        "weak_steps": [],
+        "step_evidence": [],
+    }
+    for index, item in enumerate(actions, start=1):
+        step_key = f"action_{index}"
+        trace["step_evidence"].append(
+            {
+                "step_key": step_key,
+                "type": item.get("type", ""),
+                "target": item.get("target", ""),
+                "grounded": bool(item.get("grounded", False)),
+                "confidence": float(item.get("grounding_confidence", 0.0) or 0.0),
+                "fact_coverage_score": float(item.get("fact_coverage_score", 0.0) or 0.0),
+                "evidence_refs": list(item.get("evidence_refs", []))[:4],
+            }
+        )
+        if float(item.get("grounding_confidence", 0.0) or 0.0) < 0.55:
+            trace["weak_steps"].append(step_key)
+    for index, item in enumerate(assertions, start=1):
+        step_key = f"assertion_{index}"
+        trace["step_evidence"].append(
+            {
+                "step_key": step_key,
+                "type": item.get("type", ""),
+                "target": item.get("value", "") or item.get("values", []),
+                "grounded": bool(item.get("grounded", False)),
+                "confidence": float(item.get("grounding_confidence", 0.0) or 0.0),
+                "fact_coverage_score": float(item.get("fact_coverage_score", 0.0) or 0.0),
+                "evidence_refs": list(item.get("evidence_refs", []))[:4],
+            }
+        )
+        if float(item.get("grounding_confidence", 0.0) or 0.0) < 0.55:
+            trace["weak_steps"].append(step_key)
+    return trace
 
 
 def _generic_assertion_refs(values: list[str], source_text: str, page_model: dict) -> list[dict]:
@@ -1253,7 +1560,25 @@ def _generic_assertion_refs(values: list[str], source_text: str, page_model: dic
         refs.append({"source_type": "page_fact", "source_key": "results_surface", "source_label": "Search or results surface", "matched_text": text_blob or source_text, "score": 8})
     if any(term in text_blob or term in source_text for term in ("modal", "dialog")):
         refs.append({"source_type": "page_fact", "source_key": "dialog_surface", "source_label": "Modal or dialog surface", "matched_text": text_blob or source_text, "score": 7})
+    if any(term in text_blob or term in source_text for term in ("api", "request", "response", "endpoint", "graphql", "network")) and page_model.get("api_endpoints"):
+        refs.append({"source_type": "page_fact", "source_key": "api_surface", "source_label": "Observed API surface", "matched_text": text_blob or source_text, "score": 8})
     return refs[:4]
+
+
+def _default_network_target(page_model: dict | None, expected_lower: str) -> str:
+    if not page_model:
+        return ""
+    endpoints = [str(item or "") for item in page_model.get("api_endpoints", [])]
+    if not endpoints:
+        return "api"
+    lowered = expected_lower or ""
+    for endpoint in endpoints:
+        endpoint_lower = endpoint.lower()
+        if any(token in endpoint_lower for token in ("graphql", "search", "login", "auth", "upload", "save", "submit")) and any(
+            token in lowered for token in ("graphql", "search", "login", "auth", "upload", "save", "submit", "request", "response")
+        ):
+            return endpoint
+    return endpoints[0]
 
 
 def _match_interaction_refs(action: dict, page_model: dict) -> list[dict]:
@@ -1412,12 +1737,37 @@ def _build_grounding_summary(plan: dict) -> dict:
         item for item in grounded_items
         if float(item.get("grounding_confidence", 0.0) or 0.0) < 0.45
     ]
+    scenario_grounding = plan.get("scenario_grounding", {}) or {}
     return {
         "total_items": len(items),
         "grounded_items": len(grounded_items),
         "weak_grounding_items": len(weak_items),
         "coverage": round((len(grounded_items) / len(items)), 2) if items else 0.0,
+        "scenario_fact_count": len(scenario_grounding.get("fact_ids", []) or []),
+        "scenario_fact_coverage_score": float(scenario_grounding.get("coverage_score", 0.0) or 0.0),
+        "scenario_ref_count": int(scenario_grounding.get("ref_count", 0) or 0),
+        "average_step_fact_coverage_score": round(
+            sum(float(item.get("fact_coverage_score", 0.0) or 0.0) for item in items) / len(items),
+            2,
+        ) if items else 0.0,
     }
+
+
+def _reference_coverage_score(refs: list[dict], expected_types: set[str] | None = None) -> float:
+    refs = list(refs or [])
+    if not refs:
+        return 0.0
+    expected_types = set(expected_types or set())
+    source_types = {str(ref.get("source_type", "")).strip().lower() for ref in refs if str(ref.get("source_type", "")).strip()}
+    base = min(1.0, len(refs) / 3)
+    overlap = 0
+    if expected_types and source_types:
+        overlap = len(source_types & expected_types)
+        type_score = overlap / max(min(len(expected_types), 3), 1)
+    else:
+        type_score = 0.5
+    blended = min(1.0, (base * 0.45) + (type_score * 0.55))
+    return round(max(blended, type_score if overlap else 0.0, base * 0.8), 2)
 
 
 def _generic_assertion_texts(expected_lower: str, page_model: dict | None) -> list[str]:

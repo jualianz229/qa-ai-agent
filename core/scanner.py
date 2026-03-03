@@ -160,6 +160,7 @@ class Scanner:
             "tables": [],
             "lists": [],
             "navigation": [],
+            "section_graph": {"nodes": [], "edges": []},
             "ui_components": [],
             "embedded_contexts": [],
             "metadata": {},
@@ -259,6 +260,7 @@ class Scanner:
             if alt:
                 info["images"].append(alt[:80])
 
+        info["section_graph"] = self._build_section_graph(soup)
         info["ui_components"] = self._merge_component_lists(
             self._extract_ui_components(soup),
             runtime_info.get("ui_components", []),
@@ -270,6 +272,7 @@ class Scanner:
     def _extract_form_info(self, form, soup: BeautifulSoup) -> dict:
         fields = []
         submit_texts = []
+        container_meta = self._container_metadata(form)
         for button in form.find_all(["button", "input"], limit=10):
             button_type = (button.get("type") or "").lower()
             if button.name == "button" or button_type in {"submit", "button"}:
@@ -281,7 +284,7 @@ class Scanner:
             typ = (inp.get("type") or "text").lower()
             if typ in {"hidden", "submit", "button", "image", "reset"}:
                 continue
-            field_info = self._extract_field_info(inp, form, soup, index)
+            field_info = self._extract_field_info(inp, form, soup, index, container_meta=container_meta)
             if field_info:
                 fields.append(field_info)
 
@@ -294,6 +297,10 @@ class Scanner:
             "submit_texts": submit_texts[:6],
             "field_count": len(fields),
             "context_text": form_text[:220],
+            "container_heading": container_meta.get("container_heading", ""),
+            "container_text": container_meta.get("container_text", ""),
+            "dom_path": container_meta.get("dom_path", ""),
+            "container_hints": container_meta.get("container_hints", []),
             "fields": fields,
         }
 
@@ -309,12 +316,13 @@ class Scanner:
             typ = (control.get("type") or "").lower()
             if control.name == "input" and typ in {"hidden", "submit", "button", "image", "reset", "checkbox", "radio"}:
                 continue
-            field_info = self._extract_field_info(control, soup, soup, index)
+            field_info = self._extract_field_info(control, soup, soup, index, container_meta=self._container_metadata(control))
             if field_info:
                 controls.append(field_info)
         return controls
 
-    def _extract_field_info(self, inp, form, soup: BeautifulSoup, index: int) -> dict:
+    def _extract_field_info(self, inp, form, soup: BeautifulSoup, index: int, container_meta: dict | None = None) -> dict:
+        container_meta = container_meta or self._container_metadata(inp)
         label = self._field_label_text(inp, form, soup)
         options = []
         if inp.name == "select":
@@ -371,6 +379,11 @@ class Scanner:
             "options": options[:12],
             "context_text": self._nearby_field_text(inp, form)[:180],
             "semantic_text": semantic_text[:260],
+            "dom_path": container_meta.get("dom_path", ""),
+            "container_heading": container_meta.get("container_heading", ""),
+            "container_text": container_meta.get("container_text", ""),
+            "container_hints": container_meta.get("container_hints", [])[:6],
+            "nearby_texts": container_meta.get("nearby_texts", [])[:6],
         }
 
     def _infer_field_widget(self, inp, role: str, contenteditable: bool, options: list[str]) -> str:
@@ -399,6 +412,103 @@ class Scanner:
         if options or inp.name == "select":
             return "select"
         return ""
+
+    def _container_metadata(self, element) -> dict:
+        block = element.find_parent(["form", "section", "article", "main", "aside", "nav", "div"])
+        if not block:
+            block = element
+        heading = ""
+        heading_el = block.find(["h1", "h2", "h3", "h4"]) if hasattr(block, "find") else None
+        if heading_el:
+            heading = heading_el.get_text(" ", strip=True)[:120]
+        container_text = block.get_text(" ", strip=True)[:220] if hasattr(block, "get_text") else ""
+        nearby_texts = []
+        for sibling in list(getattr(element, "previous_siblings", []))[:3] + list(getattr(element, "next_siblings", []))[:3]:
+            if hasattr(sibling, "get_text"):
+                text = sibling.get_text(" ", strip=True)
+                if 0 < len(text) <= 120:
+                    nearby_texts.append(text[:120])
+        container_hints = []
+        for value in [heading, container_text[:120], element.get("aria-label", ""), element.get("placeholder", ""), element.get("name", "")]:
+            normalized = re.sub(r"\s+", " ", str(value or "")).strip()
+            if normalized and normalized.lower() not in {item.lower() for item in container_hints}:
+                container_hints.append(normalized)
+        return {
+            "dom_path": self._dom_path(block),
+            "container_heading": heading,
+            "container_text": container_text,
+            "container_hints": container_hints[:6],
+            "nearby_texts": nearby_texts[:6],
+        }
+
+    def _dom_path(self, element, max_depth: int = 5) -> str:
+        parts = []
+        current = element
+        depth = 0
+        while current is not None and getattr(current, "name", None) and depth < max_depth:
+            tag = current.name.lower()
+            identifier = current.get("id") or ""
+            role = current.get("role") or ""
+            class_tokens = "-".join((current.get("class") or [])[:2])
+            segment = tag
+            if identifier:
+                segment += f"#{identifier[:30]}"
+            elif role:
+                segment += f"[role={role[:20]}]"
+            elif class_tokens:
+                segment += f".{class_tokens[:30]}"
+            parts.append(segment)
+            current = current.parent
+            depth += 1
+        return " > ".join(reversed(parts))
+
+    def _build_section_graph(self, soup: BeautifulSoup) -> dict:
+        selector = "main, section, article, aside, nav, form, [role='region'], [role='complementary'], [role='main'], [data-testid*='section']"
+        raw_nodes = []
+        seen = set()
+        for element in soup.select(selector)[:28]:
+            marker = id(element)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            raw_nodes.append(element)
+
+        element_to_id = {}
+        nodes = []
+        for index, element in enumerate(raw_nodes, start=1):
+            block_id = f"block_{index}"
+            element_to_id[id(element)] = block_id
+            heading_el = element.find(["h1", "h2", "h3", "h4"])
+            heading = heading_el.get_text(" ", strip=True)[:120] if heading_el else ""
+            nodes.append(
+                {
+                    "block_id": block_id,
+                    "tag": element.name.lower(),
+                    "role": str(element.get("role", "")).strip()[:40],
+                    "heading": heading,
+                    "text": element.get_text(" ", strip=True)[:220],
+                    "depth": len(list(element.parents)),
+                    "dom_path": self._dom_path(element),
+                    "link_count": len(element.find_all("a", limit=16)),
+                    "button_count": len(element.find_all(["button", "input"], limit=16)),
+                    "field_count": len(element.find_all(["input", "textarea", "select"], limit=20)),
+                    "parent_block_id": "",
+                }
+            )
+
+        edges = []
+        node_map = {node["block_id"]: node for node in nodes}
+        for element in raw_nodes:
+            block_id = element_to_id.get(id(element), "")
+            parent_block_id = ""
+            for parent in element.parents:
+                if id(parent) in element_to_id:
+                    parent_block_id = element_to_id[id(parent)]
+                    break
+            if block_id and parent_block_id and block_id in node_map:
+                node_map[block_id]["parent_block_id"] = parent_block_id
+                edges.append({"from": parent_block_id, "to": block_id, "relation": "contains"})
+        return {"nodes": nodes[:24], "edges": edges[:32]}
 
     def _field_label_text(self, inp, form, soup: BeautifulSoup) -> str:
         field_id = inp.get("id", "")
@@ -556,6 +666,7 @@ class Scanner:
         merged["page_fingerprint"] = self._combine_fingerprints(
             [root_info.get("page_fingerprint", {})] + [page.get("page_fingerprint", {}) for page in crawled_pages]
         )
+        merged["section_graph"] = root_info.get("section_graph", {"nodes": [], "edges": []})
         merged["metadata"] = root_info.get("metadata", {})
         merged["runtime_signals"] = root_info.get("runtime_signals", {})
         merged["site_profile"] = root_info.get("site_profile", {})
@@ -953,11 +1064,25 @@ class Scanner:
                     seen.add(key)
         return merged[:60]
 
+    def _stateful_probe_configs(self) -> list[dict]:
+        return [
+            {"type": "tabs", "selector": '[role="tab"]', "limit": 2, "delayMs": 250},
+            {"type": "accordion", "selector": 'summary, [aria-expanded]', "limit": 2, "delayMs": 250},
+            {"type": "drawer", "selector": '[data-drawer-toggle], [aria-controls], .drawer-toggle, .offcanvas-toggle', "limit": 2, "delayMs": 320},
+            {"type": "async_drawer", "selector": '[data-drawer-toggle], [aria-controls], .drawer-toggle, .offcanvas-toggle', "limit": 1, "delayMs": 520},
+            {"type": "modal", "selector": '[aria-haspopup="dialog"], [data-modal-open], [data-open-modal]', "limit": 2, "delayMs": 300},
+            {"type": "combobox", "selector": '[role="combobox"], [aria-autocomplete], input[list]', "limit": 2, "delayMs": 220},
+            {"type": "menu", "selector": '[aria-haspopup="menu"], [role="menuitem"], nav button, [data-menu-toggle]', "limit": 2, "delayMs": 250},
+            {"type": "datepicker", "selector": 'input[type="date"], input[type="datetime-local"], [data-datepicker], [aria-haspopup="dialog"][aria-controls*="date" i]', "limit": 2, "delayMs": 260},
+            {"type": "carousel", "selector": '.swiper-button-next, .swiper-button-prev, [data-carousel-next], [data-carousel-prev], [aria-roledescription="carousel"] button', "limit": 2, "delayMs": 260},
+            {"type": "consent_banner", "selector": '[id*="cookie" i] button, [class*="cookie" i] button, [data-testid*="cookie" i] button', "limit": 1, "delayMs": 200},
+        ]
+
     def _discover_stateful_interactions(self, page) -> dict:
         try:
             payload = page.evaluate(
                 """
-                async () => {
+                async (probeConfigs) => {
                     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
                     const textOf = (el) => (el?.innerText || el?.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
                     const attrText = (el) => [el?.getAttribute?.('aria-label'), el?.getAttribute?.('title'), el?.getAttribute?.('name'), el?.getAttribute?.('id')].filter(Boolean).join(' ').slice(0, 120);
@@ -992,19 +1117,11 @@ class Scanner:
                     const components = [];
                     const seenStateIds = new Set();
 
-                    const probeConfigs = [
-                        { type: 'tabs', selector: '[role="tab"]', limit: 2 },
-                        { type: 'accordion', selector: 'summary, [aria-expanded]', limit: 2 },
-                        { type: 'drawer', selector: '[data-drawer-toggle], [aria-controls], .drawer-toggle, .offcanvas-toggle', limit: 2 },
-                        { type: 'modal', selector: '[aria-haspopup="dialog"], [data-modal-open], [data-open-modal]', limit: 2 },
-                        { type: 'consent_banner', selector: '[id*="cookie" i] button, [class*="cookie" i] button, [data-testid*="cookie" i] button', limit: 1 },
-                    ];
-
                     for (const config of probeConfigs) {
                         const nodes = Array.from(document.querySelectorAll(config.selector))
                             .filter((el) => isVisible(el))
                             .filter((el) => safeAnchor(el))
-                            .filter((el) => el.tagName === 'A' || safeButton(el) || el.tagName === 'SUMMARY' || el.getAttribute('role') === 'tab')
+                            .filter((el) => el.tagName === 'A' || safeButton(el) || el.tagName === 'SUMMARY' || ['tab', 'menuitem', 'combobox'].includes(el.getAttribute('role')) || el.tagName === 'INPUT')
                             .slice(0, config.limit);
                         for (const node of nodes) {
                             const label = pickLabel(node);
@@ -1012,8 +1129,12 @@ class Scanner:
                             const before = captureState();
                             const beforeExpanded = node.getAttribute('aria-expanded');
                             try {
-                                node.click();
-                                await sleep(250);
+                                if (node.tagName === 'INPUT' && ['date', 'datetime-local', 'month', 'week'].includes((node.getAttribute('type') || '').toLowerCase())) {
+                                    node.focus();
+                                } else {
+                                    node.click();
+                                }
+                                await sleep(config.delayMs || 250);
                             } catch (error) {
                                 probes.push({ type: config.type, label, changed: false, error: String(error).slice(0, 120) });
                                 continue;
@@ -1046,20 +1167,57 @@ class Scanner:
                             }
                             if (config.type !== 'consent_banner') {
                                 try {
-                                    node.click();
+                                    if (node.tagName !== 'INPUT') node.click();
                                     await sleep(120);
                                 } catch (error) {}
                             }
                         }
                     }
 
+                    const scrollBefore = {
+                        state: captureState(),
+                        scrollTop: window.scrollY,
+                        scrollHeight: document.documentElement.scrollHeight,
+                    };
+                    try {
+                        window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' });
+                        await sleep(360);
+                    } catch (error) {}
+                    const scrollAfter = {
+                        state: captureState(),
+                        scrollTop: window.scrollY,
+                        scrollHeight: document.documentElement.scrollHeight,
+                    };
+                    const scrollChanged = scrollAfter.scrollHeight > scrollBefore.scrollHeight || Math.abs(scrollAfter.scrollTop - scrollBefore.scrollTop) > 80;
+                    probes.push({
+                        type: 'infinite_scroll',
+                        label: 'Scroll page',
+                        changed: scrollChanged,
+                        before: scrollBefore.state,
+                        after: scrollAfter.state,
+                    });
+                    if (scrollChanged && !seenStateIds.has('infinite_scroll_more_content')) {
+                        states.push({
+                            state_id: 'infinite_scroll_more_content',
+                            label: 'After infinite scroll interaction',
+                            trigger_action: 'scroll',
+                            trigger_label: 'Page scroll',
+                            source_type: 'infinite_scroll',
+                            before: scrollBefore.state,
+                            after: scrollAfter.state,
+                        });
+                        seenStateIds.add('infinite_scroll_more_content');
+                        components.push({ type: 'infinite_scroll', label: 'Page scroll' });
+                    }
+
                     return {
                         states: states.slice(0, 12),
-                        probes: probes.slice(0, 12),
-                        ui_components: components.slice(0, 12),
+                        probes: probes.slice(0, 18),
+                        ui_components: components.slice(0, 18),
                     };
                 }
-                """
+                """,
+                self._stateful_probe_configs(),
             )
         except Exception as exc:
             console.print(f"[yellow]  Gagal melakukan state discovery: {exc}[/yellow]")

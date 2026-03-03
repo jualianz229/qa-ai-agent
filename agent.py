@@ -25,15 +25,19 @@ from rich.panel import Panel
 from rich.rule import Rule
 
 from core.ai_engine import AIEngine
-from core.artifacts import execution_debug_path, execution_learning_path, execution_results_path, json_artifact_path
-from core.confidence import compute_composite_confidence
+from core.artifacts import confidence_analysis_path, execution_debug_path, execution_learning_path, execution_results_path, flaky_analysis_path, json_artifact_path, token_usage_path
+from core.case_memory import merge_case_memory
+from core.confidence import build_historical_confidence_signal, compute_composite_confidence
+from core.contradictions import analyze_cross_stage_contradictions
 from core.executor import CodeGenerator
+from core.flaky_bank import merge_flaky_history
 from core.guardrails import validate_execution_plan
 from core.planner import build_execution_plan, build_normalized_page_model, save_json_artifact
 from core.result_analyzer import analyze_execution_results, save_execution_summary
 from core.run_context import merge_recrawl_project_info
 from core.scanner import Scanner
 from core.site_profiles import enrich_site_profile_with_clusters, load_site_profile, merge_execution_learning
+from core.artifacts import contradiction_analysis_path
 
 load_dotenv()
 
@@ -70,6 +74,7 @@ def process_single_url(
 
     engine.last_scope_validation = {}
     engine.last_scenario_validation = {}
+    engine.reset_usage()
 
     console.print(Rule(f"[bold]Scan Halaman: {url}[/bold]"))
     with console.status(
@@ -111,6 +116,8 @@ def process_single_url(
                 {
                     "issues": engine.last_scope_validation.get("issues", []),
                     "allowed_vocabulary": engine.last_scope_validation.get("allowed_vocabulary", {}),
+                    "task_contract": engine.last_scope_validation.get("task_contract", {}),
+                    "unsupported_surface_report": engine.last_scope_validation.get("unsupported_surface_report", {}),
                 },
                 json_artifact_path(
                     project_info["run_dir"],
@@ -159,17 +166,30 @@ def process_single_url(
             console.print(f"  [green][OK][/green] CSV berhasil dibuat: [dim]{saved_csv_path}[/dim]")
             if engine.last_scenario_validation:
                 scenario_validation_path = save_json_artifact(
-                    {
-                        "issues": engine.last_scenario_validation.get("issues", []),
-                        "rejected_cases": engine.last_scenario_validation.get("rejected_cases", []),
-                        "allowed_vocabulary": engine.last_scenario_validation.get("allowed_vocabulary", {}),
-                    },
-                    json_artifact_path(
-                        project_info["run_dir"],
-                        f"Scenario_Validation_{project_info['safe_name']}_{project_info['timestamp']}.json",
-                    ),
+                {
+                    "issues": engine.last_scenario_validation.get("issues", []),
+                    "rejected_cases": engine.last_scenario_validation.get("rejected_cases", []),
+                    "allowed_vocabulary": engine.last_scenario_validation.get("allowed_vocabulary", {}),
+                    "task_contract": engine.last_scenario_validation.get("task_contract", {}),
+                    "grounding_summary": engine.last_scenario_validation.get("grounding_summary", {}),
+                    "unsupported_surface_report": engine.last_scenario_validation.get("unsupported_surface_report", {}),
+                },
+                json_artifact_path(
+                    project_info["run_dir"],
+                    f"Scenario_Validation_{project_info['safe_name']}_{project_info['timestamp']}.json",
+                ),
                 )
                 console.print(f"  [green][OK][/green] Validasi scenario disimpan: [dim]{scenario_validation_path}[/dim]")
+            case_memory_info = merge_case_memory(url, parsed_data, page_scope, page_model)
+            if case_memory_info:
+                case_memory_path = save_json_artifact(
+                    case_memory_info,
+                    json_artifact_path(
+                        project_info["run_dir"],
+                        f"Case_Memory_{project_info['safe_name']}_{project_info['timestamp']}.json",
+                    ),
+                )
+                console.print(f"  [green][OK][/green] Case memory diperbarui: [dim]{case_memory_path}[/dim]")
 
             execution_plan = build_execution_plan(parsed_data, page_model, page_info.get("url", url), site_profile=site_profile)
             execution_plan_validation = validate_execution_plan(execution_plan, page_model, page_info)
@@ -189,17 +209,52 @@ def process_single_url(
                 raise ValueError(
                     "Semua execution plan ditolak guardrail. Periksa JSON/Execution_Plan_Validation_*.json untuk detail."
                 )
-            composite_confidence = compute_composite_confidence(
+            confidence_scope = dict(page_scope)
+            if "ai_confidence" in confidence_scope:
+                confidence_scope["confidence"] = confidence_scope.get("ai_confidence", confidence_scope.get("confidence", 0))
+            historical_signal = build_historical_confidence_signal(
+                url=url,
+                page_model=page_model,
                 page_scope=page_scope,
+                site_profile=site_profile,
+            )
+            contradiction_report = analyze_cross_stage_contradictions(
+                page_scope=page_scope,
+                test_cases=parsed_data,
+                execution_plan=execution_plan,
+                page_model=page_model,
+                page_info=page_info,
+                scenario_validation=engine.last_scenario_validation,
+                execution_plan_validation=execution_plan_validation,
+            )
+            composite_confidence = compute_composite_confidence(
+                page_scope=confidence_scope,
                 page_info=page_info,
                 page_model=page_model,
                 scope_validation=engine.last_scope_validation,
                 scenario_validation=engine.last_scenario_validation,
                 execution_plan_validation=execution_plan_validation,
+                historical_signal=historical_signal,
+                contradiction_analysis=contradiction_report,
             )
             page_scope["confidence"] = composite_confidence["score"]
             page_scope["confidence_breakdown"] = composite_confidence["breakdown"]
+            page_scope["confidence_explanation"] = composite_confidence["explanation"]
+            page_scope["confidence_class"] = composite_confidence["confidence_class"]
             runner.save_page_scope(page_scope, project_info)
+            confidence_path = save_json_artifact(
+                {
+                    "url": url,
+                    "page_type": page_scope.get("page_type", ""),
+                    "confidence": composite_confidence["score"],
+                    "confidence_score": int(round(composite_confidence["score"] * 100)),
+                    "confidence_class": composite_confidence["confidence_class"],
+                    "explanation": composite_confidence["explanation"],
+                    "breakdown": composite_confidence["breakdown"],
+                    "historical_signal": historical_signal,
+                },
+                confidence_analysis_path(project_info["run_dir"]),
+            )
             execution_plan_path = save_json_artifact(
                 execution_plan,
                 json_artifact_path(
@@ -207,13 +262,34 @@ def process_single_url(
                     f"Execution_Plan_{project_info['safe_name']}_{project_info['timestamp']}.json",
                 ),
             )
+            contradiction_path = save_json_artifact(
+                contradiction_report,
+                contradiction_analysis_path(project_info["run_dir"]),
+            )
             console.print(f"  [green][OK][/green] Execution plan dibuat: [dim]{execution_plan_path}[/dim]")
             console.print(f"  [green][OK][/green] Validation plan disimpan: [dim]{validation_path}[/dim]")
+            console.print(f"  [green][OK][/green] Confidence analysis disimpan: [dim]{confidence_path}[/dim]")
+            console.print(
+                f"  [green][OK][/green] Contradiction analysis disimpan: [dim]{contradiction_path}[/dim]"
+            )
+            if contradiction_report.get("summary", {}).get("contradiction_count", 0):
+                console.print(
+                    "  [yellow][i][/yellow] Cross-stage contradictions: "
+                    f"{contradiction_report['summary'].get('contradiction_count', 0)}"
+                )
+            if page_scope.get("confidence_explanation"):
+                console.print(
+                    "  [dim]Confidence insight: "
+                    + " | ".join(page_scope.get("confidence_explanation", [])[:3])
+                    + "[/dim]"
+                )
 
             console.print("  [dim][>] Menyusun ringkasan eksekutif...[/dim]")
             md_summary = engine.generate_executive_summary(url, project_info["title"], page_info, parsed_data)
             saved_md_path = runner.save_executive_summary(md_summary, project_info)
             console.print(f"  [green][OK][/green] Ringkasan eksekutif dibuat: [dim]{saved_md_path}[/dim]")
+            usage_path = save_json_artifact(engine.usage_snapshot(), token_usage_path(project_info["run_dir"]))
+            console.print(f"  [green][OK][/green] Token usage disimpan: [dim]{usage_path}[/dim]")
 
             executor = CodeGenerator(engine)
             pom_script = executor.generate_pom_script(project_info, execution_plan_path, headless=executor_headless)
@@ -240,9 +316,63 @@ def process_single_url(
                     console.print("\n[bold green][OK] Eksekusi otomatisasi selesai.[/bold green]")
                     results_path = execution_results_path(project_info["run_dir"])
                     if results_path.exists():
+                        results_payload = json.loads(results_path.read_text(encoding="utf-8"))
+                        flaky_info = merge_flaky_history(
+                            url,
+                            results_payload,
+                            page_model=page_model,
+                            page_scope=page_scope,
+                        )
+                        if flaky_info:
+                            flaky_path = save_json_artifact(flaky_info, flaky_analysis_path(project_info["run_dir"]))
+                            console.print(f"[green][OK][/green] Flaky analysis disimpan: [dim]{flaky_path}[/dim]")
                         summary = analyze_execution_results(results_path)
                         summary_path = save_execution_summary(results_path, summary)
                         runner.update_csv_with_execution_results(saved_csv_path, results_path, csv_sep)
+                        contradiction_report = analyze_cross_stage_contradictions(
+                            page_scope=page_scope,
+                            test_cases=parsed_data,
+                            execution_plan=execution_plan,
+                            page_model=page_model,
+                            page_info=page_info,
+                            scenario_validation=engine.last_scenario_validation,
+                            execution_plan_validation=execution_plan_validation,
+                            execution_results=results_payload,
+                        )
+                        post_execution_confidence = compute_composite_confidence(
+                            page_scope=confidence_scope,
+                            page_info=page_info,
+                            page_model=page_model,
+                            scope_validation=engine.last_scope_validation,
+                            scenario_validation=engine.last_scenario_validation,
+                            execution_plan_validation=execution_plan_validation,
+                            execution_results=results_payload,
+                            historical_signal=historical_signal,
+                            contradiction_analysis=contradiction_report,
+                        )
+                        page_scope["confidence"] = post_execution_confidence["score"]
+                        page_scope["confidence_breakdown"] = post_execution_confidence["breakdown"]
+                        page_scope["confidence_explanation"] = post_execution_confidence["explanation"]
+                        page_scope["confidence_class"] = post_execution_confidence["confidence_class"]
+                        runner.save_page_scope(page_scope, project_info)
+                        save_json_artifact(
+                            {
+                                "url": url,
+                                "page_type": page_scope.get("page_type", ""),
+                                "confidence": post_execution_confidence["score"],
+                                "confidence_score": int(round(post_execution_confidence["score"] * 100)),
+                                "confidence_class": post_execution_confidence["confidence_class"],
+                                "explanation": post_execution_confidence["explanation"],
+                                "breakdown": post_execution_confidence["breakdown"],
+                                "historical_signal": historical_signal,
+                                "execution_status_counts": summary.get("status_counts", {}),
+                            },
+                            confidence_analysis_path(project_info["run_dir"]),
+                        )
+                        save_json_artifact(
+                            contradiction_report,
+                            contradiction_analysis_path(project_info["run_dir"]),
+                        )
                         debug_path = execution_debug_path(project_info["run_dir"])
                         learning_path = execution_learning_path(project_info["run_dir"])
                         console.print(f"[green][OK][/green] Ringkasan eksekusi dibuat: [dim]{summary_path}[/dim]")

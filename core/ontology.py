@@ -161,6 +161,11 @@ ACTION_ONTOLOGY = {
     "assert_control_visible": {"target_kind": "control"},
     "assert_title_contains": {"target_kind": "title"},
     "assert_url_contains": {"target_kind": "url"},
+    "assert_network_seen": {"target_kind": "network"},
+    "assert_network_status_ok": {"target_kind": "network"},
+    "assert_graphql_ok": {"target_kind": "network"},
+    "assert_endpoint_allowlist": {"target_kind": "network"},
+    "assert_cross_origin_safe": {"target_kind": "network"},
 }
 
 

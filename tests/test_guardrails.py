@@ -1,6 +1,6 @@
 import unittest
 
-from core.guardrails import validate_execution_plan, validate_page_scope, validate_test_scenarios
+from core.guardrails import build_task_contract, validate_execution_plan, validate_page_scope, validate_test_scenarios
 
 
 class GuardrailTests(unittest.TestCase):
@@ -176,6 +176,119 @@ class GuardrailTests(unittest.TestCase):
 
         self.assertTrue(validated["is_valid"])
         self.assertEqual(len(validated["valid_plan"]["plans"]), 1)
+
+    def test_validate_page_scope_aligns_grounded_instruction_focus_terms(self):
+        page_scope = {
+            "page_type": "listing page",
+            "primary_goal": "Browse stories",
+            "key_modules": ["Navigation"],
+            "critical_user_flows": ["Open article detail"],
+            "priority_areas": ["Navigation"],
+            "risks": ["Broken links"],
+            "scope_summary": "Browse stories from the listing page.",
+            "confidence": 0.81,
+        }
+
+        validated = validate_page_scope(
+            page_scope,
+            self.page_model,
+            self.page_info,
+            custom_instruction="Prioritize search behavior and keyword relevance.",
+        )
+
+        self.assertIn("search", " ".join(validated["page_scope"]["priority_areas"]).lower())
+        self.assertIn("instruction focus", " ".join(validated["issues"]).lower())
+        self.assertIn("search", validated["task_contract"]["instruction_focus_terms"])
+
+    def test_validate_test_scenarios_rejects_weak_task_alignment(self):
+        test_cases = [
+            {
+                "ID": "CRT-001",
+                "Module": "Cart",
+                "Category": "Functional",
+                "Test Type": "Positive",
+                "Title": "Verify shopping cart quantity update",
+                "Precondition": "",
+                "Steps to Reproduce": "1. Open the site https://example.com/news\n2. Click the cart icon.\n3. Increase item quantity.",
+                "Expected Result": "The cart quantity should increase.",
+                "Actual Result": "",
+                "Severity": "Medium",
+                "Priority": "P2",
+                "Evidence": "",
+                "Automation": "auto",
+            }
+        ]
+
+        validated = validate_test_scenarios(
+            test_cases,
+            self.page_model,
+            {"key_modules": ["Search", "Navigation"], "critical_user_flows": ["Search stories"]},
+            self.page_info,
+            custom_instruction="Focus on search relevance.",
+        )
+
+        self.assertFalse(validated["is_valid"])
+        self.assertEqual(len(validated["valid_cases"]), 0)
+        self.assertEqual(len(validated["rejected_cases"]), 1)
+        self.assertIn("not aligned", " ".join(validated["issues"]).lower())
+
+    def test_build_task_contract_compiles_instruction_constraints(self):
+        contract = build_task_contract(
+            self.page_model,
+            {"key_modules": ["Search"], "critical_user_flows": ["Search stories"]},
+            self.page_info,
+            custom_instruction="Prioritize search, only negative cases, and avoid authentication.",
+        )
+
+        instruction_contract = contract["instruction_contract"]
+        self.assertIn("search", instruction_contract["must_focus_surfaces"])
+        self.assertIn("auth", " ".join(instruction_contract["unsupported_requested_surfaces"] + instruction_contract["avoid_surfaces"]))
+        self.assertEqual(instruction_contract["only_test_types"], ["negative"])
+
+    def test_build_task_contract_detects_instruction_conflicts(self):
+        contract = build_task_contract(
+            self.page_model,
+            {"key_modules": ["Search"], "critical_user_flows": ["Search stories"]},
+            self.page_info,
+            custom_instruction="Ignore search but test search and only positive and only negative cases.",
+        )
+
+        instruction_contract = contract["instruction_contract"]
+        self.assertTrue(instruction_contract["conflicts"])
+        self.assertFalse(instruction_contract["only_test_types"])
+        self.assertTrue(contract["instruction_conflicts"])
+
+    def test_validate_test_scenarios_attaches_grounding_fact_ids(self):
+        test_cases = [
+            {
+                "ID": "SRH-002",
+                "Module": "Search",
+                "Category": "Functionality",
+                "Test Type": "Negative",
+                "Title": "Search with empty keyword",
+                "Precondition": "",
+                "Steps to Reproduce": "1. Open the site https://example.com/news\n2. Input '' into the 'Search' field.\n3. Click the 'Search' button.",
+                "Expected Result": "Search validation is displayed.",
+                "Actual Result": "",
+                "Severity": "Medium",
+                "Priority": "P2",
+                "Evidence": "",
+                "Automation": "auto",
+            }
+        ]
+
+        validated = validate_test_scenarios(
+            test_cases,
+            self.page_model,
+            {"key_modules": ["Search"], "critical_user_flows": ["Search stories"]},
+            self.page_info,
+            custom_instruction="Prioritize search negative cases.",
+        )
+
+        self.assertTrue(validated["is_valid"])
+        self.assertTrue(validated["valid_cases"][0]["_grounding"]["fact_ids"])
+        self.assertGreater(validated["valid_cases"][0]["_grounding"]["score"], 0)
+        self.assertGreaterEqual(validated["valid_cases"][0]["_grounding"]["coverage_score"], 0.5)
 
 
 if __name__ == "__main__":

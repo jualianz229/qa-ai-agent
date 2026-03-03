@@ -26,6 +26,10 @@
       <span>Failed</span>
       <strong>{{ metrics.failed }}</strong>
     </article>
+    <article class="metric-card metric-card-info metric-card-elevated">
+      <span>Alerts</span>
+      <strong>{{ metrics.alerts }}</strong>
+    </article>
   </div>
 </section>
 
@@ -170,7 +174,7 @@
   </div>
 </section>
 
-<section class="panel panel-queue">
+<section class="panel panel-queue" id="execution-queue">
   <div class="panel-head">
     <div>
       <p class="eyebrow">Live jobs</p>
@@ -197,7 +201,7 @@
   <div id="jobs-container" class="job-list">
     {% if active_jobs %}
       {% for job in active_jobs %}
-        <article class="job-card job-{{ job.status }}">
+        <article class="job-card job-{{ job.status }}" data-job-card="{{ job.id }}">
           <header>
             <strong>{{ job.payload.url }}</strong>
             <span>{{ job.status }}</span>
@@ -209,7 +213,7 @@
           {% if job.run_name %}
             <a class="inline-link" href="{{ url_for('run_detail', run_name=job.run_name) }}">Open run {{ job.run_name }}</a>
           {% endif %}
-          <pre>{{ "\n".join(job.log_lines[-10:]) }}</pre>
+          <pre class="job-log-viewer" data-job-id="{{ job.id }}">{{ "\n".join(job.log_lines) }}</pre>
         </article>
       {% endfor %}
     {% else %}
@@ -231,7 +235,7 @@
       <a class="run-card" href="{{ url_for('run_detail', run_name=run.run_name) }}">
         <div class="run-card-top">
           <span class="run-name">{{ run.run_name }}</span>
-          <span class="confidence" title="AI confidence">{{ run.confidence_score }}</span>
+          <span class="confidence" title="{{ run.confidence_explanation|join(' | ') if run.confidence_explanation else 'AI confidence' }}">{{ run.confidence_score }}</span>
         </div>
         <h3>{{ run.title or run.run_name }}</h3>
         <p>{{ run.page_type or "unknown page type" }}</p>
@@ -245,6 +249,46 @@
     {% else %}
       <p class="empty-state">No result folders found yet.</p>
     {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Confidence ops</p>
+      <h2>Hot signals</h2>
+    </div>
+  </div>
+  <div class="insight-grid">
+    <section class="insight-card">
+      <div class="insight-card-head"><h3>Overconfidence alerts</h3></div>
+      <div class="insight-list">
+        {% for run in runs if run.alerts %}
+          {% for alert in run.alerts[:1] %}
+            <article class="insight-item">
+              <strong>{{ run.run_name }}</strong>
+              <p>{{ alert.title }}</p>
+              <p class="helper-text">{{ alert.detail }}</p>
+            </article>
+          {% endfor %}
+        {% else %}
+          <p class="empty-state">No overconfidence alerts in recent runs.</p>
+        {% endfor %}
+      </div>
+    </section>
+    <section class="insight-card">
+      <div class="insight-card-head"><h3>Domain heatmap</h3></div>
+      <div class="heatmap-list">
+        {% for item in knowledge_snapshot.global.top_semantic_patterns[:5] %}
+          <div class="heatmap-row">
+            <span>{{ item.key }}</span>
+            <div class="heatmap-bar"><i style="width: {{ (item.score * 10)|round(0)|int }}%"></i></div>
+          </div>
+        {% else %}
+          <p class="empty-state">Knowledge heatmap not warm yet.</p>
+        {% endfor %}
+      </div>
+    </section>
   </div>
 </section>
 
@@ -305,6 +349,40 @@
   </div>
 </section>
 
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Benchmark</p>
+      <h2>Real run safety snapshot</h2>
+    </div>
+    <a class="inline-link" href="{{ url_for('benchmark_page') }}">Open benchmark</a>
+  </div>
+  <div class="insight-grid">
+    <section class="insight-card">
+      <div class="mini-stats">
+        <div><dt>Runs sampled</dt><dd>{{ benchmark_snapshot.total_cases or 0 }}</dd></div>
+        <div><dt>Avg grounding</dt><dd>{{ benchmark_snapshot.average_grounding_coverage or 0 }}</dd></div>
+        <div><dt>Avg heuristic fit</dt><dd>{{ benchmark_snapshot.average_heuristic_alignment or 0 }}</dd></div>
+        <div><dt>Avg confidence</dt><dd>{{ benchmark_snapshot.average_confidence or 0 }}</dd></div>
+        <div><dt>Avg source trust</dt><dd>{{ benchmark_snapshot.average_source_trust or 0 }}</dd></div>
+        <div><dt>Avg stability</dt><dd>{{ benchmark_snapshot.average_stability or 0 }}</dd></div>
+      </div>
+    </section>
+    <section class="insight-card">
+      <div class="insight-card-head">
+        <h3>Observed clusters</h3>
+      </div>
+      <div class="artifact-groups">
+        {% for key in benchmark_snapshot.cluster_keys[:10] %}
+          <span class="panel-badge">{{ key }}</span>
+        {% else %}
+          <p class="empty-state">Belum ada benchmark cluster yang bisa diringkas.</p>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</section>
+
 <script id="template-bootstrap" type="application/json">{{ templates | tojson }}</script>
 <script>
 const jobForm = document.getElementById("job-form");
@@ -320,6 +398,7 @@ const templatePreview = document.getElementById("template-preview");
 const selectedFileName = document.getElementById("selected-file-name");
 const templateCount = document.getElementById("template-count");
 const uploadPanel = document.getElementById("upload-panel");
+const executionQueueSection = document.getElementById("execution-queue");
 
 let templateCache = {};
 let activeTemplate = "";
@@ -337,13 +416,46 @@ function toggleUploadPanel(visible) {
   uploadPanel.classList.toggle("hidden-panel", !visible);
 }
 
+function captureJobLogStates() {
+  const states = {};
+  const viewers = jobsContainer.querySelectorAll(".job-log-viewer[data-job-id]");
+  viewers.forEach((viewer) => {
+    const jobId = viewer.getAttribute("data-job-id");
+    if (!jobId) return;
+    const bottomGap = viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight;
+    states[jobId] = {
+      scrollTop: viewer.scrollTop,
+      wasNearBottom: bottomGap < 24,
+    };
+  });
+  return states;
+}
+
+function restoreJobLogStates(states) {
+  const viewers = jobsContainer.querySelectorAll(".job-log-viewer[data-job-id]");
+  viewers.forEach((viewer) => {
+    const jobId = viewer.getAttribute("data-job-id");
+    const state = states[jobId];
+    if (!state) {
+      viewer.scrollTop = viewer.scrollHeight;
+      return;
+    }
+    if (state.wasNearBottom) {
+      viewer.scrollTop = viewer.scrollHeight;
+      return;
+    }
+    viewer.scrollTop = state.scrollTop;
+  });
+}
+
 function renderJobs(jobs) {
+  const scrollStates = captureJobLogStates();
   if (!jobs.length) {
     jobsContainer.innerHTML = '<p class="empty-state">No active jobs yet.</p>';
     return;
   }
   jobsContainer.innerHTML = jobs.map((job) => `
-    <article class="job-card job-${escapeHtml(job.status)}">
+    <article class="job-card job-${escapeHtml(job.status)}" data-job-card="${escapeHtml(job.id)}">
       <header>
         <strong>${escapeHtml(job.payload.url)}</strong>
         <span>${escapeHtml(job.status)}</span>
@@ -351,9 +463,33 @@ function renderJobs(jobs) {
       <p class="mono">${escapeHtml((job.command || []).join(" "))}</p>
       ${job.payload.template_name ? `<p class="helper-text">Template: ${escapeHtml(job.payload.template_name)}</p>` : ""}
       ${job.run_name ? `<a class="inline-link" href="/runs/${encodeURIComponent(job.run_name)}">Open run ${escapeHtml(job.run_name)}</a>` : ""}
-      <pre>${escapeHtml((job.log_lines || []).slice(-10).join("\n"))}</pre>
+      <pre class="job-log-viewer" data-job-id="${escapeHtml(job.id)}">${escapeHtml((job.log_lines || []).join("\n"))}</pre>
     </article>
   `).join("");
+  window.requestAnimationFrame(() => restoreJobLogStates(scrollStates));
+}
+
+function scrollToExecutionQueue() {
+  if (!executionQueueSection) {
+    return;
+  }
+  executionQueueSection.classList.add("queue-focus");
+  executionQueueSection.scrollIntoView({ behavior: "smooth", block: "start" });
+  window.setTimeout(() => {
+    executionQueueSection.classList.remove("queue-focus");
+  }, 1800);
+}
+
+function summarizePrecheck(precheck) {
+  const contract = precheck?.contract || {};
+  const focus = (contract.must_focus_surfaces || []).slice(0, 3);
+  const avoid = (contract.avoid_surfaces || []).slice(0, 3);
+  const parts = [];
+  if (focus.length) parts.push(`Focus: ${focus.join(", ")}`);
+  if (avoid.length) parts.push(`Avoid: ${avoid.join(", ")}`);
+  if (contract.only_test_types?.length) parts.push(`Only: ${contract.only_test_types.join(", ")}`);
+  if (contract.preferred_test_types?.length) parts.push(`Prefer: ${contract.preferred_test_types.join(", ")}`);
+  return parts.join(" | ") || "Instruction precheck passed.";
 }
 
 function renderTemplateOptions(templates) {
@@ -495,19 +631,37 @@ uploadTemplateButton.addEventListener("click", async () => {
 
 jobForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  statusNode.textContent = "Starting job...";
+  statusNode.textContent = "Checking instruction...";
   const formData = new FormData(jobForm);
   if (activeTemplate === "__upload__") {
     formData.set("template_name", "");
   }
+  const precheckResponse = await fetch("/api/instruction-precheck", { method: "POST", body: formData });
+  const precheckPayload = await precheckResponse.json();
+  if (!precheckResponse.ok || !precheckPayload.ok) {
+    statusNode.textContent = precheckPayload.error || "Instruction precheck failed.";
+    return;
+  }
+  const precheck = precheckPayload.precheck || {};
+  const conflicts = precheck.contract?.conflicts || [];
+  if (conflicts.length) {
+    statusNode.textContent = `Instruction conflict: ${conflicts.join(" | ")}`;
+    return;
+  }
+  statusNode.textContent = summarizePrecheck(precheck);
   const response = await fetch("/api/jobs", { method: "POST", body: formData });
   const payload = await response.json();
   if (!response.ok) {
+    if (payload.precheck?.contract?.conflicts?.length) {
+      statusNode.textContent = `Instruction conflict: ${payload.precheck.contract.conflicts.join(" | ")}`;
+      return;
+    }
     statusNode.textContent = payload.error || "Failed to start job.";
     return;
   }
   statusNode.textContent = `Job ${payload.job.id} started.`;
   await refreshJobs();
+  scrollToExecutionQueue();
 });
 
 bootstrapTemplates();

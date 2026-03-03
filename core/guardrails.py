@@ -57,6 +57,77 @@ CONTEXT_RULES = {
 }
 
 
+def build_task_contract(
+    page_model: dict | None,
+    page_scope: dict | None,
+    page_info: dict | None,
+    custom_instruction: str = "",
+) -> dict:
+    allowed = build_allowed_vocabulary(page_model, page_scope, page_info)
+    page_scope = page_scope or {}
+    page_facts = allowed["page_facts"]
+    allowed_terms = []
+    forbidden_terms = []
+    supported_surfaces = []
+    unsupported_surfaces = []
+
+    for name, rule in CONTEXT_RULES.items():
+        is_supported = _rule_is_supported(rule, page_facts)
+        target_list = allowed_terms if is_supported else forbidden_terms
+        target_list.extend([name, *rule["terms"][:6]])
+        if is_supported:
+            supported_surfaces.append(name)
+        else:
+            unsupported_surfaces.append(name)
+
+    allowed_terms.extend(allowed.get("component_types", []))
+    allowed_terms.extend(allowed.get("module_labels", []))
+    allowed_terms.extend(allowed.get("flow_names", []))
+    allowed_terms.extend(allowed.get("field_semantics", []))
+    allowed_terms.extend(allowed.get("field_aliases", []))
+
+    instruction_contract = compile_instruction_contract(custom_instruction, page_facts)
+    instruction_focus_terms = _clean_string_list(
+        _extract_instruction_focus_terms(custom_instruction, page_facts)
+        + instruction_contract.get("must_focus_surfaces", [])
+    )
+    focus_terms = _clean_string_list(
+        list(page_scope.get("key_modules", []))
+        + list(page_scope.get("critical_user_flows", []))
+        + list(page_scope.get("priority_areas", []))
+        + instruction_focus_terms
+    )
+    if not focus_terms:
+        focus_terms = _clean_string_list(allowed.get("module_labels", [])[:8] + allowed.get("flow_names", [])[:6])
+
+    return {
+        "objective": _normalize_text(page_scope.get("primary_goal", "")) or "Ground test planning in detected page surfaces only.",
+        "focus_terms": focus_terms[:16],
+        "instruction_focus_terms": instruction_focus_terms[:8],
+        "instruction_conflicts": instruction_contract.get("conflicts", []),
+        "allowed_terms": _clean_string_list(allowed_terms + instruction_contract.get("must_focus_surfaces", []))[:120],
+        "forbidden_terms": _clean_string_list(
+            forbidden_terms
+            + instruction_contract.get("avoid_surfaces", [])
+            + instruction_contract.get("unsupported_requested_surfaces", [])
+        )[:120],
+        "supported_surfaces": _clean_string_list(supported_surfaces)[:20],
+        "unsupported_surfaces": _clean_string_list(unsupported_surfaces)[:20],
+        "source_trust_order": [
+            "dom_content",
+            "section_graph",
+            "field_catalog",
+            "state_discovery",
+            "linked_pages",
+            "knowledge_bank",
+            "feedback",
+            "ai_inference",
+        ],
+        "instruction_applies": bool(custom_instruction.strip()),
+        "instruction_contract": instruction_contract,
+    }
+
+
 def build_allowed_vocabulary(page_model: dict | None, page_scope: dict | None, page_info: dict | None) -> dict:
     page_model = page_model or {}
     page_scope = page_scope or {}
@@ -122,8 +193,14 @@ def build_allowed_vocabulary(page_model: dict | None, page_scope: dict | None, p
     }
 
 
-def validate_page_scope(page_scope: dict, page_model: dict | None, page_info: dict | None) -> dict:
+def validate_page_scope(
+    page_scope: dict,
+    page_model: dict | None,
+    page_info: dict | None,
+    custom_instruction: str = "",
+) -> dict:
     allowed = build_allowed_vocabulary(page_model, page_scope, page_info)
+    task_contract = build_task_contract(page_model, page_scope, page_info, custom_instruction=custom_instruction)
     issues = []
 
     sanitized = {
@@ -166,14 +243,52 @@ def validate_page_scope(page_scope: dict, page_model: dict | None, page_info: di
         sanitized["critical_user_flows"] = _fallback_flows(allowed["page_facts"], allowed["component_types"])
         issues.append("critical_user_flows fell back to grounded flows.")
 
+    instruction_focus_terms = task_contract.get("instruction_focus_terms", [])
+    if instruction_focus_terms:
+        scope_text = " ".join(
+            [
+                sanitized["page_type"],
+                sanitized["primary_goal"],
+                sanitized["scope_summary"],
+                *sanitized["key_modules"],
+                *sanitized["critical_user_flows"],
+                *sanitized["priority_areas"],
+            ]
+        )
+        if not _find_term_hits(scope_text, instruction_focus_terms):
+            sanitized["priority_areas"] = _clean_string_list(sanitized["priority_areas"] + instruction_focus_terms[:2])
+            issues.append("page scope missed grounded instruction focus terms and was aligned to supported priorities.")
+    instruction_conflicts = task_contract.get("instruction_conflicts", [])
+    if instruction_conflicts:
+        issues.extend(f"instruction conflict: {item}" for item in instruction_conflicts[:4])
+    avoid_surfaces = task_contract.get("instruction_contract", {}).get("avoid_surfaces", [])
+    if avoid_surfaces:
+        before_modules = list(sanitized["key_modules"])
+        before_flows = list(sanitized["critical_user_flows"])
+        sanitized["key_modules"] = _remove_items_by_terms(sanitized["key_modules"], avoid_surfaces)
+        sanitized["critical_user_flows"] = _remove_items_by_terms(sanitized["critical_user_flows"], avoid_surfaces)
+        sanitized["priority_areas"] = _remove_items_by_terms(sanitized["priority_areas"], avoid_surfaces)
+        if before_modules != sanitized["key_modules"] or before_flows != sanitized["critical_user_flows"]:
+            issues.append("page scope removed avoided instruction surfaces.")
+
     penalty = min(0.45, 0.08 * len(invalid_modules + invalid_flows + invalid_priorities))
+    if instruction_focus_terms and any("instruction focus" in issue for issue in issues):
+        penalty = min(0.5, penalty + 0.08)
+    if instruction_conflicts:
+        penalty = min(0.55, penalty + 0.12)
     sanitized["confidence"] = round(max(0.15, sanitized["confidence"] - penalty), 2)
 
     return {
-        "is_valid": len(invalid_modules + invalid_flows) == 0,
+        "is_valid": len(invalid_modules + invalid_flows) == 0 and not instruction_conflicts,
         "issues": issues,
         "page_scope": sanitized,
         "allowed_vocabulary": allowed,
+        "task_contract": task_contract,
+        "unsupported_surface_report": {
+            "unsupported_requested_surfaces": task_contract.get("instruction_contract", {}).get("unsupported_requested_surfaces", []),
+            "avoid_surfaces": task_contract.get("instruction_contract", {}).get("avoid_surfaces", []),
+            "instruction_conflicts": instruction_conflicts,
+        },
     }
 
 
@@ -182,21 +297,41 @@ def validate_test_scenarios(
     page_model: dict | None,
     page_scope: dict | None,
     page_info: dict | None,
+    custom_instruction: str = "",
 ) -> dict:
     allowed = build_allowed_vocabulary(page_model, page_scope, page_info)
+    task_contract = build_task_contract(page_model, page_scope, page_info, custom_instruction=custom_instruction)
     valid_cases = []
     rejected_cases = []
     issues = []
+    instruction_conflicts = task_contract.get("instruction_conflicts", [])
+    if instruction_conflicts:
+        issues.extend(f"instruction conflict: {item}" for item in instruction_conflicts[:4])
 
     for case in test_cases:
         context_errors = detect_out_of_context_case(case, allowed["page_facts"])
+        alignment = assess_case_task_alignment(case, allowed, task_contract)
+        grounding = collect_case_grounding(case, page_model, page_info, allowed["page_facts"])
         sanitized = dict(case)
         sanitized["Module"] = _normalize_text(sanitized.get("Module", "")) or "General"
         sanitized["Title"] = _normalize_text(sanitized.get("Title", "")) or "Untitled scenario"
         sanitized["Automation"] = str(sanitized.get("Automation", "auto")).strip().lower() or "auto"
-        if context_errors:
-            rejected_cases.append({"case": sanitized, "issues": context_errors})
-            issues.extend(f"{sanitized.get('ID', 'UNKNOWN')}: {item}" for item in context_errors)
+        sanitized["_grounding"] = grounding
+        sanitized["_task_alignment"] = alignment
+        case_issues = context_errors + alignment["issues"]
+        if grounding["requires_grounding"] and not grounding["fact_ids"]:
+            case_issues.append("scenario has no grounded fact references from the scanned page model")
+        elif grounding["requires_grounding"] and grounding["score"] < 0.18:
+            case_issues.append("scenario grounding is too weak to trust")
+        instruction_contract = task_contract.get("instruction_contract", {})
+        preferred_types = instruction_contract.get("only_test_types", [])
+        if preferred_types:
+            case_type = str(sanitized.get("Test Type", "")).strip().lower()
+            if case_type not in preferred_types:
+                case_issues.append(f"scenario test type '{case_type or '-'}' violates instruction-only coverage")
+        if case_issues:
+            rejected_cases.append({"case": sanitized, "issues": case_issues, "alignment": alignment, "grounding": grounding})
+            issues.extend(f"{sanitized.get('ID', 'UNKNOWN')}: {item}" for item in case_issues)
             continue
         valid_cases.append(sanitized)
 
@@ -210,6 +345,21 @@ def validate_test_scenarios(
         "valid_cases": valid_cases,
         "rejected_cases": rejected_cases,
         "allowed_vocabulary": allowed,
+        "task_contract": task_contract,
+        "grounding_summary": {
+            "valid_grounded_cases": sum(1 for item in valid_cases if item.get("_grounding", {}).get("fact_ids")),
+            "rejected_grounding_cases": sum(1 for item in rejected_cases if item.get("grounding", {}).get("fact_ids")),
+            "average_fact_coverage_score": round(
+                sum(float(item.get("_grounding", {}).get("coverage_score", 0.0) or 0.0) for item in valid_cases) / len(valid_cases),
+                2,
+            ) if valid_cases else 0.0,
+            "instruction_conflict_count": len(instruction_conflicts),
+        },
+        "unsupported_surface_report": {
+            "unsupported_requested_surfaces": task_contract.get("instruction_contract", {}).get("unsupported_requested_surfaces", []),
+            "avoid_surfaces": task_contract.get("instruction_contract", {}).get("avoid_surfaces", []),
+            "instruction_conflicts": instruction_conflicts,
+        },
     }
 
 
@@ -222,7 +372,8 @@ def validate_execution_plan(execution_plan: dict, page_model: dict | None, page_
     issues = []
     allowed_action_types = set(page_model.get("action_ontology", {}).keys()) or {
         "open_url", "click", "fill", "select", "upload", "hover", "scroll", "dismiss", "wait_for_text",
-        "inspect", "assert_text_visible", "assert_control_text", "assert_url_contains"
+        "inspect", "assert_text_visible", "assert_control_text", "assert_url_contains", "assert_network_seen", "assert_network_status_ok",
+        "assert_graphql_ok", "assert_endpoint_allowlist", "assert_cross_origin_safe"
     }
 
     for plan in execution_plan.get("plans", []):
@@ -264,6 +415,12 @@ def validate_execution_plan(execution_plan: dict, page_model: dict | None, page_
                 and not facts.get("auth", False)
             ):
                 assertion_errors.append("url assertion has weak navigation support on this page")
+            if assertion_type in {"assert_network_seen", "assert_network_status_ok", "assert_graphql_ok", "assert_endpoint_allowlist", "assert_cross_origin_safe"} and not any(
+                facts.get(key, False) for key in ("api_surface", "graphql", "search", "form", "upload", "auth")
+            ):
+                assertion_errors.append("network assertion requires API/network-capable page signals")
+            if assertion_type == "assert_graphql_ok" and not any(facts.get(key, False) for key in ("graphql", "api_surface")):
+                assertion_errors.append("graphql assertion requires graphql/api signal")
         for checkpoint in plan_copy.get("checkpoints", []):
             checkpoint_type = str(checkpoint.get("type", "")).strip().lower()
             if checkpoint_type == "captcha" and not facts.get("captcha", False):
@@ -309,6 +466,211 @@ def detect_out_of_context_case(test_case: dict, page_facts: dict) -> list[str]:
     return issues
 
 
+def assess_case_task_alignment(test_case: dict, allowed: dict, task_contract: dict) -> dict:
+    text = " ".join(
+        str(test_case.get(key, ""))
+        for key in ("Module", "Category", "Title", "Precondition", "Steps to Reproduce", "Expected Result")
+    )
+    normalized_text = _normalize_text(text).lower()
+    forbidden_hits = _find_term_hits(normalized_text, task_contract.get("forbidden_terms", []))
+    allowed_hits = _find_term_hits(normalized_text, task_contract.get("allowed_terms", []))
+    focus_hits = _find_term_hits(normalized_text, task_contract.get("focus_terms", []))
+    interaction_terms = ("input ", "click ", "select ", "choose ", "upload ", "hover ", "scroll ", "wait ")
+    has_interaction = any(term in normalized_text for term in interaction_terms)
+    open_only = "open the site" in normalized_text and not has_interaction
+    score = 0.0
+    score += min(0.45, len(allowed_hits) * 0.11)
+    score += min(0.4, len(focus_hits) * 0.18)
+    if open_only:
+        score += 0.18
+    score -= min(0.6, len(forbidden_hits) * 0.22)
+    issues = []
+    if forbidden_hits:
+        issues.append(f"mentions unsupported surfaces: {', '.join(forbidden_hits[:3])}")
+    instruction_contract = task_contract.get("instruction_contract", {})
+    avoid_hits = _find_term_hits(normalized_text, instruction_contract.get("avoid_surfaces", []))
+    if avoid_hits:
+        issues.append(f"touches avoided instruction surfaces: {', '.join(avoid_hits[:3])}")
+    if has_interaction and not allowed_hits and not focus_hits:
+        issues.append("interaction steps are not aligned to grounded page surfaces or task focus")
+    elif not open_only and not allowed_hits and not focus_hits and task_contract.get("focus_terms"):
+        issues.append("case has weak task alignment with the grounded page scope")
+    preferred_types = instruction_contract.get("preferred_test_types", [])
+    case_type = str(test_case.get("Test Type", "")).strip().lower()
+    if preferred_types and case_type and case_type not in preferred_types:
+        score = max(0.0, score - 0.08)
+    return {
+        "score": round(max(0.0, min(1.0, score)), 2),
+        "allowed_hits": allowed_hits[:6],
+        "focus_hits": focus_hits[:6],
+        "forbidden_hits": forbidden_hits[:6],
+        "avoid_hits": avoid_hits[:6],
+        "issues": issues,
+        "is_aligned": not issues,
+    }
+
+
+def collect_case_grounding(
+    test_case: dict,
+    page_model: dict | None,
+    page_info: dict | None,
+    page_facts: dict | None,
+) -> dict:
+    page_model = page_model or {}
+    page_info = page_info or {}
+    page_facts = page_facts or {}
+    text = " ".join(
+        str(test_case.get(key, ""))
+        for key in ("Module", "Category", "Title", "Precondition", "Steps to Reproduce", "Expected Result")
+    )
+    normalized_text = _normalize_text(text).lower()
+    refs = []
+
+    for field in page_model.get("field_catalog", [])[:30]:
+        candidates = [
+            field.get("semantic_label", ""),
+            field.get("label", ""),
+            field.get("semantic_type", "").replace("_", " "),
+            field.get("field_key", "").replace("_", " "),
+            *field.get("aliases", [])[:8],
+        ]
+        score, matched = _best_grounding_match(normalized_text, candidates)
+        if score >= 7:
+            refs.append(
+                {
+                    "fact_id": f"field::{field.get('field_key', '')}",
+                    "source_type": "field",
+                    "source_key": field.get("field_key", ""),
+                    "source_label": field.get("semantic_label", "") or field.get("label", ""),
+                    "matched_text": matched,
+                    "score": score,
+                }
+            )
+
+    for component in page_model.get("component_catalog", [])[:30]:
+        candidates = [
+            component.get("label", ""),
+            component.get("type", "").replace("_", " "),
+            component.get("component_key", "").replace("_", " "),
+            *component.get("aliases", [])[:8],
+        ]
+        score, matched = _best_grounding_match(normalized_text, candidates)
+        if score >= 7:
+            refs.append(
+                {
+                    "fact_id": f"component::{component.get('component_key', '')}",
+                    "source_type": "component",
+                    "source_key": component.get("component_key", ""),
+                    "source_label": component.get("label", "") or component.get("type", ""),
+                    "matched_text": matched,
+                    "score": score,
+                }
+            )
+
+    for node in page_model.get("section_graph", {}).get("nodes", [])[:24]:
+        candidates = [node.get("heading", ""), node.get("tag", "")]
+        score, matched = _best_grounding_match(normalized_text, candidates)
+        if score >= 7:
+            refs.append(
+                {
+                    "fact_id": f"section::{node.get('block_id', '')}",
+                    "source_type": "section",
+                    "source_key": node.get("block_id", ""),
+                    "source_label": node.get("heading", "") or node.get("tag", ""),
+                    "matched_text": matched,
+                    "score": score,
+                }
+            )
+
+    for state in page_info.get("discovered_states", [])[:16]:
+        candidates = [state.get("label", ""), state.get("trigger_label", ""), state.get("state_id", "").replace("_", " ")]
+        score, matched = _best_grounding_match(normalized_text, candidates)
+        if score >= 7:
+            refs.append(
+                {
+                    "fact_id": f"state::{state.get('state_id', '')}",
+                    "source_type": "state",
+                    "source_key": state.get("state_id", ""),
+                    "source_label": state.get("label", ""),
+                    "matched_text": matched,
+                    "score": score,
+                }
+            )
+
+    for endpoint in page_model.get("api_endpoints", [])[:16]:
+        endpoint_text = str(endpoint or "")
+        endpoint_key = _normalize_key(endpoint_text)
+        score, matched = _best_grounding_match(normalized_text, [endpoint_text, endpoint_text.split("/")[-1]])
+        if score >= 7:
+            refs.append(
+                {
+                    "fact_id": f"api::{endpoint_key}",
+                    "source_type": "api_endpoint",
+                    "source_key": endpoint_text,
+                    "source_label": endpoint_text[:160],
+                    "matched_text": matched,
+                    "score": score,
+                }
+            )
+
+    for name, rule in CONTEXT_RULES.items():
+        if not _rule_is_supported(rule, page_facts):
+            continue
+        hits = _find_term_hits(normalized_text, [name, *rule.get("terms", [])])
+        if hits:
+            refs.append(
+                {
+                    "fact_id": f"page_fact::{name}",
+                    "source_type": "page_fact",
+                    "source_key": name,
+                    "source_label": name.replace("_", " "),
+                    "matched_text": hits[0],
+                    "score": 8,
+                }
+            )
+
+    deduped = []
+    seen = set()
+    for ref in sorted(refs, key=lambda item: item.get("score", 0), reverse=True):
+        fact_id = ref.get("fact_id", "")
+        if not fact_id or fact_id in seen:
+            continue
+        deduped.append(ref)
+        seen.add(fact_id)
+
+    interaction_terms = ("input ", "click ", "select ", "choose ", "upload ", "hover ", "scroll ", "wait ")
+    requires_grounding = any(term in normalized_text for term in interaction_terms)
+    best_score = max((ref.get("score", 0) for ref in deduped), default=0)
+    mentioned_surfaces = []
+    for name, rule in CONTEXT_RULES.items():
+        if _find_term_hits(normalized_text, [name, *rule.get("terms", [])]):
+            mentioned_surfaces.append(name)
+    covered_surfaces = [
+        surface
+        for surface in mentioned_surfaces
+        if any(ref.get("fact_id") == f"page_fact::{surface}" for ref in deduped)
+    ]
+    coverage_score = (
+        round(len(covered_surfaces) / len(set(mentioned_surfaces)), 2)
+        if mentioned_surfaces
+        else (1.0 if deduped or not requires_grounding else 0.0)
+    )
+    return {
+        "fact_ids": [ref.get("fact_id", "") for ref in deduped[:12]],
+        "refs": deduped[:8],
+        "summary": "; ".join(
+            f"{ref.get('source_type', '')}:{ref.get('source_label', '') or ref.get('source_key', '')}"
+            for ref in deduped[:4]
+        ),
+        "score": round(min(1.0, best_score / 12), 2) if best_score else 0.0,
+        "coverage_score": coverage_score,
+        "mentioned_surfaces": _clean_string_list(mentioned_surfaces),
+        "covered_surfaces": _clean_string_list(covered_surfaces),
+        "ref_count": len(deduped),
+        "requires_grounding": requires_grounding,
+    }
+
+
 def _derive_page_facts(page_model: dict, page_info: dict) -> dict:
     fingerprint = page_info.get("page_fingerprint", {})
     component_types = {
@@ -349,6 +711,7 @@ def _derive_page_facts(page_model: dict, page_info: dict) -> dict:
         "chart": bool(fingerprint.get("has_chart") or "chart" in component_types),
         "spa_shell": bool(fingerprint.get("has_spa_shell") or "spa_shell" in component_types),
         "graphql": bool(fingerprint.get("has_graphql") or "graphql_surface" in component_types),
+        "api_surface": bool(page_info.get("apis") or fingerprint.get("has_graphql") or "graphql_surface" in component_types),
         "websocket": bool(fingerprint.get("has_websocket") or "live_feed" in component_types),
         "live_updates": bool(fingerprint.get("has_live_updates") or "live_feed" in component_types),
         "otp_flow": bool(fingerprint.get("has_otp_flow") or "otp_verification" in component_types),
@@ -367,6 +730,17 @@ def _find_context_mismatches(items: list[str], page_facts: dict) -> list[str]:
 
 def _filter_context_items(items: list[str], page_facts: dict) -> list[str]:
     return [item for item in items if not detect_out_of_context_case({"Module": item, "Title": item}, page_facts)]
+
+
+def _remove_items_by_terms(items: list[str], terms: list[str]) -> list[str]:
+    lowered_terms = [_normalize_text(term).lower() for term in terms if _normalize_text(term)]
+    rows = []
+    for item in items:
+        text = _normalize_text(item).lower()
+        if any(term in text for term in lowered_terms):
+            continue
+        rows.append(item)
+    return rows
 
 
 def _fallback_modules(page_facts: dict, component_types: list[str]) -> list[str]:
@@ -416,6 +790,147 @@ def _clean_string_list(items: list) -> list[str]:
             cleaned.append(text)
             seen.add(text.lower())
     return cleaned
+
+
+def compile_instruction_contract(custom_instruction: str, page_facts: dict) -> dict:
+    normalized = _normalize_text(custom_instruction).lower()
+    must_focus_surfaces = []
+    avoid_surfaces = []
+    unsupported_requested_surfaces = []
+    preferred_test_types = []
+    only_test_types = []
+    conflicts = []
+
+    if not normalized:
+        return {
+            "must_focus_surfaces": [],
+            "avoid_surfaces": [],
+            "unsupported_requested_surfaces": [],
+            "preferred_test_types": [],
+            "only_test_types": [],
+            "conflicts": [],
+            "requires_edge_cases": False,
+            "requires_error_validations": False,
+        }
+
+    priority_verbs = ("prioritize", "focus on", "focus", "emphasize", "target")
+    request_verbs = priority_verbs + ("test", "cover", "check", "validate", "verify")
+    avoid_verbs = ("avoid", "ignore", "skip", "exclude", "do not test", "don't test")
+    for name, rule in CONTEXT_RULES.items():
+        terms = [name.replace("_", " "), *rule.get("terms", [])]
+        requested = any(term in normalized for term in terms)
+        if not requested:
+            continue
+        if any(f"{verb} {term}" in normalized for verb in request_verbs for term in terms):
+            if _rule_is_supported(rule, page_facts):
+                must_focus_surfaces.append(name.replace("_", " "))
+            else:
+                unsupported_requested_surfaces.append(name.replace("_", " "))
+        if any(f"{verb} {term}" in normalized for verb in avoid_verbs for term in terms):
+            avoid_surfaces.append(name.replace("_", " "))
+        elif requested and not _rule_is_supported(rule, page_facts):
+            unsupported_requested_surfaces.append(name.replace("_", " "))
+
+    if "negative" in normalized:
+        preferred_test_types.append("negative")
+    if "positive" in normalized:
+        preferred_test_types.append("positive")
+    if "only negative" in normalized:
+        only_test_types.append("negative")
+    if "only positive" in normalized:
+        only_test_types.append("positive")
+
+    must_focus_surfaces = _clean_string_list(must_focus_surfaces)
+    avoid_surfaces = _clean_string_list(avoid_surfaces)
+    unsupported_requested_surfaces = _clean_string_list(unsupported_requested_surfaces)
+    preferred_test_types = _clean_string_list(preferred_test_types)
+    only_test_types = _clean_string_list(only_test_types)
+
+    overlap = sorted(set(must_focus_surfaces) & set(avoid_surfaces))
+    for surface in overlap:
+        conflicts.append(f"surface '{surface}' is both focused and avoided")
+    if overlap:
+        must_focus_surfaces = [item for item in must_focus_surfaces if item not in overlap]
+
+    if len(set(only_test_types)) > 1:
+        conflicts.append("instruction requests mutually exclusive only-test-type constraints")
+        only_test_types = []
+
+    return {
+        "must_focus_surfaces": must_focus_surfaces,
+        "avoid_surfaces": avoid_surfaces,
+        "unsupported_requested_surfaces": unsupported_requested_surfaces,
+        "preferred_test_types": preferred_test_types,
+        "only_test_types": only_test_types,
+        "conflicts": _clean_string_list(conflicts),
+        "requires_edge_cases": any(term in normalized for term in ("edge case", "boundary", "boundary value")),
+        "requires_error_validations": any(term in normalized for term in ("error validation", "validation", "invalid")),
+    }
+
+
+def _extract_instruction_focus_terms(custom_instruction: str, page_facts: dict) -> list[str]:
+    normalized = _normalize_text(custom_instruction).lower()
+    if not normalized:
+        return []
+    matches = []
+    for name, rule in CONTEXT_RULES.items():
+        if not _rule_is_supported(rule, page_facts):
+            continue
+        if name in normalized or any(term in normalized for term in rule["terms"]):
+            matches.append(name.replace("_", " "))
+    return _clean_string_list(matches)
+
+
+def _rule_is_supported(rule: dict, page_facts: dict) -> bool:
+    requires = rule.get("requires")
+    requires_any = rule.get("requires_any", ())
+    if requires:
+        return bool(page_facts.get(requires, False))
+    if requires_any:
+        return any(page_facts.get(item, False) for item in requires_any)
+    return True
+
+
+def _find_term_hits(text: str, terms: list[str]) -> list[str]:
+    normalized_text = _normalize_text(text).lower()
+    hits = []
+    for term in terms:
+        normalized_term = _normalize_text(term).lower()
+        if normalized_term and normalized_term not in hits and normalized_term in normalized_text:
+            hits.append(normalized_term)
+    return hits
+
+
+def _best_grounding_match(text: str, candidates: list[str]) -> tuple[int, str]:
+    best_score = 0
+    best_match = ""
+    for candidate in candidates:
+        score = _grounding_match_score(text, candidate)
+        if score > best_score:
+            best_score = score
+            best_match = _normalize_text(candidate)
+    return best_score, best_match
+
+
+def _grounding_match_score(text: str, candidate: str) -> int:
+    haystack = _normalize_text(text).lower()
+    needle = _normalize_text(candidate).lower()
+    if not haystack or not needle:
+        return 0
+    if needle in haystack:
+        return 11 if " " in needle else 8
+    needle_tokens = [token for token in re.findall(r"[a-z0-9]+", needle) if len(token) > 2]
+    if not needle_tokens:
+        return 0
+    hits = sum(1 for token in needle_tokens if token in haystack)
+    if hits >= min(len(needle_tokens), 2):
+        return min(10, 6 + hits)
+    return 0
+
+
+def _normalize_key(value: object) -> str:
+    text = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower())
+    return text.strip("_")
 
 
 def _normalize_text(value: object) -> str:

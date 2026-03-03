@@ -46,6 +46,22 @@ class PlannerTests(unittest.TestCase):
             "images": [],
             "apis": [],
             "sections": [{"heading": "Top Story", "text": "Long content block"}],
+            "section_graph": {
+                "nodes": [
+                    {
+                        "block_id": "hero",
+                        "tag": "section",
+                        "heading": "Top Story",
+                        "text": "Long content block",
+                        "dom_path": "main > section#hero",
+                        "parent_block_id": "",
+                        "link_count": 1,
+                        "button_count": 1,
+                        "field_count": 1,
+                    }
+                ],
+                "edges": [],
+            },
             "tables": [],
             "lists": [["Item 1", "Item 2", "Item 3", "Item 4", "Item 5", "Item 6"]],
             "navigation": [[{"text": "Home", "href": "/"}, {"text": "News", "href": "/news"}]],
@@ -77,9 +93,13 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("session_model", model)
         self.assertIn("runtime_observer", model)
         self.assertIn("page_facts", model)
+        self.assertIn("section_graph", model)
+        self.assertEqual(model["section_graph"]["nodes"][0]["block_id"], "hero")
         self.assertGreaterEqual(len(model["state_graph"]["states"]), 2)
         self.assertEqual(model["field_catalog"][0]["semantic_type"], "search_query")
         self.assertIn("search", [alias.lower() for alias in model["field_catalog"][0]["aliases"]])
+        self.assertTrue(model["field_catalog"][0]["container_hints"])
+        self.assertTrue(model["field_catalog"][0]["learned_path_hints"] is not None)
         self.assertIn("component_catalog", model)
 
     def test_build_execution_plan_generates_actions_and_assertions(self):
@@ -98,6 +118,10 @@ class PlannerTests(unittest.TestCase):
                 "method": "post",
                 "submit_texts": ["Submit"],
                 "context_text": "Contact form",
+                "container_heading": "Contact form",
+                "container_text": "Share your phone number",
+                "dom_path": "main > section#contact > form#contact-form",
+                "container_hints": ["Contact form", "Share your phone number"],
                 "fields": [
                     {
                         "tag": "input",
@@ -118,11 +142,17 @@ class PlannerTests(unittest.TestCase):
                         "options": [],
                         "context_text": "Phone Number",
                         "semantic_text": "Phone Number contact phone tel",
+                        "container_hints": ["Contact form", "Phone Number"],
+                        "nearby_texts": ["Share your phone number"],
+                        "dom_path": "main > section#contact > form#contact-form > input#contact-phone",
                     }
                 ],
             }],
             "images": [],
-            "apis": [],
+            "apis": [
+                "https://example.com/api/contact/submit",
+                "https://example.com/graphql",
+            ],
             "sections": [],
             "tables": [],
             "lists": [],
@@ -152,23 +182,58 @@ class PlannerTests(unittest.TestCase):
                 "Title": "Submit phone number",
                 "Automation": "auto",
                 "Steps to Reproduce": "1. Open the site https://example.com/contact\n2. Input '08123' into the 'phone number' field.\n3. Click the 'Submit' button.",
-                "Expected Result": "The form should display the text 'Success'.",
+                "Expected Result": "The form should display the text 'Success'. The contact API request should return 200 without error, stay same-origin, and use the approved endpoint allowlist. GraphQL should not return errors.",
+                "_grounding": {
+                    "fact_ids": ["field::phone_number", "component::form"],
+                    "score": 0.83,
+                    "summary": "field:Phone Number; component:Form",
+                },
+                "_task_alignment": {
+                    "score": 0.88,
+                    "focus_hits": ["form", "phone number"],
+                },
             }
         ]
-        plan = build_execution_plan(cases, model, "https://example.com/contact")
+        plan = build_execution_plan(
+            cases,
+            model,
+            "https://example.com/contact",
+            site_profile={"network": {"allowed_hosts": ["cdn.example.com"], "cross_origin_mode": "same-origin"}},
+        )
         self.assertEqual(plan["plans"][0]["target_url"], "https://example.com/contact")
         action_types = [action["type"] for action in plan["plans"][0]["actions"]]
         assertion_types = [assertion["type"] for assertion in plan["plans"][0]["assertions"]]
         self.assertIn("click", action_types)
         self.assertIn("fill", action_types)
         self.assertIn("assert_text_visible", assertion_types)
+        self.assertIn("assert_network_seen", assertion_types)
+        self.assertIn("assert_network_status_ok", assertion_types)
+        self.assertIn("assert_graphql_ok", assertion_types)
+        self.assertIn("assert_endpoint_allowlist", assertion_types)
+        self.assertIn("assert_cross_origin_safe", assertion_types)
         self.assertIn("state_targets", plan["plans"][0])
         self.assertIn("session_strategy", plan["plans"][0])
         self.assertIn("orchestration", plan["plans"][0])
         self.assertIn("interaction_hints", plan["plans"][0])
+        self.assertIn("network_policy", plan)
+        self.assertIn("expected_request_map", plan["plans"][0])
+        self.assertEqual(plan["network_policy"]["base_host"], "example.com")
+        self.assertIn("https://example.com/api/contact/submit", plan["plans"][0]["expected_request_map"]["expected_endpoints"])
         fill_action = next(action for action in plan["plans"][0]["actions"] if action["type"] == "fill")
         self.assertEqual(fill_action["semantic_type"], "phone_number")
         self.assertTrue(fill_action["selector_candidates"])
+        self.assertTrue(fill_action["container_hints"])
+        self.assertIn("form_key", fill_action["grounding_refs"][0])
+        self.assertTrue(fill_action["evidence_refs"])
+        self.assertTrue(fill_action["evidence_summary"])
+        self.assertIn("evidence_trace", plan["plans"][0])
+        self.assertGreaterEqual(plan["plans"][0]["evidence_trace"]["grounded_action_count"], 1)
+        self.assertEqual(plan["plans"][0]["scenario_grounding"]["fact_ids"], ["field::phone_number", "component::form"])
+        self.assertEqual(plan["plans"][0]["scenario_alignment"]["score"], 0.88)
+        self.assertIn("scenario_fact_coverage_score", plan["plans"][0]["grounding_summary"])
+        self.assertGreaterEqual(plan["plans"][0]["grounding_summary"]["scenario_fact_coverage_score"], 0.0)
+        self.assertIn("average_step_fact_coverage_score", plan["plans"][0]["grounding_summary"])
+        self.assertGreaterEqual(fill_action["fact_coverage_score"], 0.5)
 
     def test_build_execution_plan_supports_component_flows_and_richer_assertions(self):
         page_info = {

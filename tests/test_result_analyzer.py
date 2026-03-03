@@ -7,7 +7,9 @@ from core.artifacts import (
     execution_checkpoint_path,
     execution_debug_path,
     execution_learning_path,
+    execution_network_path,
     execution_results_path,
+    flaky_analysis_path,
 )
 from core.result_analyzer import analyze_execution_results, save_execution_summary
 
@@ -20,6 +22,8 @@ class ResultAnalyzerTests(unittest.TestCase):
             debug_path = execution_debug_path(run_dir)
             learning_path = execution_learning_path(run_dir)
             checkpoint_path = execution_checkpoint_path(run_dir)
+            network_path = execution_network_path(run_dir)
+            flaky_path = flaky_analysis_path(run_dir)
             results_path.write_text(
                 json.dumps(
                     {
@@ -55,6 +59,33 @@ class ResultAnalyzerTests(unittest.TestCase):
                 json.dumps({"checkpoints": [{"id": "D", "type": "otp", "reason": "OTP needed"}]}),
                 encoding="utf-8",
             )
+            network_path.write_text(
+                json.dumps(
+                    {
+                        "network_entries": [
+                            {
+                                "id": "A",
+                                "summary": {
+                                    "request_count": 2,
+                                    "response_count": 2,
+                                    "failing_response_count": 1,
+                                    "top_endpoints": [{"path": "/api/login", "hits": 2}],
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            flaky_path.write_text(
+                json.dumps(
+                    {
+                        "summary": {"flaky_count": 1},
+                        "flaky_cases": [{"id": "A", "transitions": 1, "recent_statuses": ["passed", "failed"]}],
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             summary = analyze_execution_results(results_path)
             summary_path = save_execution_summary(results_path, summary)
@@ -68,11 +99,17 @@ class ResultAnalyzerTests(unittest.TestCase):
             self.assertEqual(len(summary["debug_entries"]), 1)
             self.assertEqual(len(summary["learning_entries"]), 1)
             self.assertEqual(len(summary["checkpoints"]), 1)
+            self.assertEqual(summary["network_summary"]["request_count"], 2)
+            self.assertEqual(summary["network_summary"]["failing_response_count"], 1)
+            self.assertEqual(summary["flaky_analysis"]["summary"]["flaky_count"], 1)
             self.assertTrue(summary_path.exists())
             self.assertEqual(summary_path.parent, run_dir)
             self.assertIn("## Debug Entries", summary_text)
             self.assertIn("## Checkpoints", summary_text)
             self.assertIn("## Selector Learning", summary_text)
+            self.assertIn("## Network Insight", summary_text)
+            self.assertIn("## Flaky Insight", summary_text)
+            self.assertIn("/api/login", summary_text)
             self.assertIn("target=phone number", summary_text)
 
 

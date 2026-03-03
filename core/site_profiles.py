@@ -65,6 +65,11 @@ DEFAULT_SITE_PROFILE = {
         "auto_dismiss_consent": True,
         "video_mode": "per_test",
     },
+    "network": {
+        "cross_origin_mode": "same-origin",
+        "allowed_hosts": [],
+        "graphql_error_keys": ["errors", "error", "extensions"],
+    },
     "learning": deepcopy(LEARNING_DEFAULTS),
 }
 

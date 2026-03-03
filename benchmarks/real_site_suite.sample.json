@@ -1,0 +1,25 @@
+{
+  "suite_name": "my-real-sites",
+  "targets": [
+    {
+      "name": "homepage-smoke",
+      "url": "https://example.com/",
+      "expected_page_type": "landing",
+      "key_modules": ["navigation", "content"],
+      "critical_user_flows": ["open primary navigation", "read hero content"],
+      "instructions": "Focus on core navigation, visible content blocks, and broken links.",
+      "use_auth": false,
+      "crawl_limit": 3
+    },
+    {
+      "name": "search-surface",
+      "url": "https://example.com/search",
+      "expected_page_type": "search_listing",
+      "key_modules": ["search", "listing", "filter"],
+      "critical_user_flows": ["search by keyword", "change filters"],
+      "instructions": "Prioritize result relevance, empty state handling, and filter persistence.",
+      "use_auth": false,
+      "crawl_limit": 3
+    }
+  ]
+}

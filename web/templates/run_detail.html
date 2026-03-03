@@ -23,7 +23,14 @@
     <article class="metric-card metric-card-info metric-card-elevated">
       <span>AI Confidence</span>
       <strong>{{ run.confidence_score }}</strong>
-      <small class="metric-footnote">Confidence score from scanned context</small>
+      <small class="metric-footnote">{{ run.confidence_class|title }} confidence from grounded context and run history</small>
+      {% if run.confidence_explanation %}
+        <ul class="metric-notes">
+          {% for note in run.confidence_explanation[:3] %}
+            <li>{{ note }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
     </article>
     <article class="metric-card metric-card-info metric-card-elevated">
       <span>Total Cases</span>
@@ -38,6 +45,201 @@
       <strong>{{ run.status_counts.failed or 0 }}</strong>
     </article>
   </div>
+</section>
+
+<section class="grid-two">
+  <article class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Alerts</p>
+        <h2>Confidence watch</h2>
+      </div>
+      <span class="panel-badge">{{ run.alert_count or 0 }} active</span>
+    </div>
+    <div class="insight-list">
+      {% for alert in run.alerts %}
+        <article class="insight-item alert-card alert-{{ alert.level }}">
+          <strong>{{ alert.title }}</strong>
+          <p>{{ alert.detail }}</p>
+        </article>
+      {% else %}
+        <p class="empty-state">No confidence alert for this run.</p>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Trend</p>
+        <h2>Confidence by domain</h2>
+      </div>
+    </div>
+    <div class="trend-list">
+      {% for item in run.confidence_trend %}
+        <div class="trend-row{% if item.current %} is-current{% endif %}">
+          <span>{{ item.run_name }}</span>
+          <strong>{{ item.confidence_percent }} / 100</strong>
+        </div>
+      {% else %}
+        <p class="empty-state">No domain trend available yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="grid-two">
+  <article class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Confidence</p>
+        <h2>Why this score</h2>
+      </div>
+      <span class="panel-badge">{{ run.confidence_class|title }}</span>
+    </div>
+    <div class="confidence-grid">
+      <section class="insight-card">
+        <div class="insight-card-head"><h3>Confidence signals</h3></div>
+        <div class="mini-stats">
+          <div><dt>Coverage</dt><dd>{{ ((run.confidence_breakdown.coverage or 0) * 100)|round(0)|int }} / 100</dd></div>
+          <div><dt>Source trust</dt><dd>{{ ((run.confidence_breakdown.source_trust or 0) * 100)|round(0)|int }} / 100</dd></div>
+          <div><dt>Stability</dt><dd>{{ ((run.confidence_breakdown.stability or 0) * 100)|round(0)|int }} / 100</dd></div>
+          <div><dt>Real-world</dt><dd>{{ ((run.confidence_breakdown.real_world_calibration or 0) * 100)|round(0)|int }} / 100</dd></div>
+          <div><dt>Anti-hallu</dt><dd>{{ ((run.confidence_breakdown.anti_hallucination or 0) * 100)|round(0)|int }} / 100</dd></div>
+        </div>
+      </section>
+      <section class="insight-card">
+        <div class="insight-card-head"><h3>Explanation</h3></div>
+        <div class="insight-list">
+          {% for item in run.confidence_explanation %}
+            <article class="insight-item"><p>{{ item }}</p></article>
+          {% else %}
+            <p class="empty-state">No confidence explanation available.</p>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+  </article>
+
+  <article class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Grounding</p>
+        <h2>Evidence and trust</h2>
+      </div>
+    </div>
+    <div class="confidence-grid">
+      <section class="insight-card">
+        <div class="insight-card-head"><h3>Negative evidence</h3></div>
+        <div class="artifact-groups">
+          {% for item in run.negative_evidence_detail.negative_surfaces %}
+            <span class="panel-badge">{{ item }}</span>
+          {% else %}
+            <p class="empty-state">No explicit negative surface recorded.</p>
+          {% endfor %}
+        </div>
+        {% if run.negative_evidence_detail.positive_surfaces %}
+          <p class="helper-text">Positive surfaces: {{ run.negative_evidence_detail.positive_surfaces|join(", ") }}</p>
+        {% endif %}
+      </section>
+      <section class="insight-card">
+        <div class="insight-card-head"><h3>Historical signal</h3></div>
+        <div class="mini-stats">
+          <div><dt>Case patterns</dt><dd>{{ run.historical_signal.matching_pattern_count or 0 }}</dd></div>
+          <div><dt>Helpful feedback</dt><dd>{{ run.historical_signal.feedback_helpful or 0 }}</dd></div>
+          <div><dt>Misleading feedback</dt><dd>{{ run.historical_signal.feedback_misleading or 0 }}</dd></div>
+          <div><dt>Flaky history</dt><dd>{{ run.historical_signal.flaky_count or 0 }}</dd></div>
+        </div>
+      </section>
+    </div>
+  </article>
+</section>
+
+<section class="grid-two">
+  <article class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">AI usage</p>
+        <h2>Estimated token usage</h2>
+      </div>
+    </div>
+    <div class="insight-grid">
+      <section class="insight-card">
+        <div class="mini-stats">
+          <div><dt>Calls</dt><dd>{{ run.token_usage_summary.calls or 0 }}</dd></div>
+          <div><dt>Input</dt><dd>{{ run.token_usage_summary.estimated_input_tokens or 0 }}</dd></div>
+          <div><dt>Output</dt><dd>{{ run.token_usage_summary.estimated_output_tokens or 0 }}</dd></div>
+          <div><dt>Total</dt><dd>{{ run.token_usage_summary.estimated_total_tokens or 0 }}</dd></div>
+        </div>
+      </section>
+      <section class="insight-card">
+        <div class="insight-card-head"><h3>By stage</h3></div>
+        <div class="insight-list">
+          {% for stage, item in run.token_usage.by_stage.items() %}
+            <article class="insight-item">
+              <strong>{{ stage }}</strong>
+              <p class="helper-text">{{ item.calls }} call(s) • {{ item.estimated_total_tokens }} tokens</p>
+            </article>
+          {% else %}
+            <p class="empty-state">No token telemetry saved for this run.</p>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+  </article>
+
+  <article class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Guardrails</p>
+        <h2>Rejection viewer</h2>
+      </div>
+    </div>
+    <div class="insight-grid">
+      <section class="insight-card">
+        <div class="mini-stats">
+          <div><dt>Scope issues</dt><dd>{{ run.guardrail_summary.scope_issue_count or 0 }}</dd></div>
+          <div><dt>Scenario rejections</dt><dd>{{ run.guardrail_summary.scenario_rejection_count or 0 }}</dd></div>
+          <div><dt>Plan rejections</dt><dd>{{ run.guardrail_summary.plan_rejection_count or 0 }}</dd></div>
+          <div><dt>Contradictions</dt><dd>{{ run.guardrail_summary.contradiction_count or 0 }}</dd></div>
+        </div>
+      </section>
+      <section class="insight-card">
+        <div class="insight-card-head"><h3>Top reasons</h3></div>
+        <div class="insight-list">
+          {% for issue in run.guardrail_summary.scope_issues[:3] %}
+            <article class="insight-item"><p>{{ issue }}</p></article>
+          {% endfor %}
+          {% for item in run.guardrail_summary.scenario_rejections[:2] %}
+            <article class="insight-item"><p>{{ (item.issues or ["Scenario rejected"])|join(" | ") }}</p></article>
+          {% endfor %}
+          {% for item in run.guardrail_summary.plan_rejections[:2] %}
+            <article class="insight-item"><p>{{ (item.issues or ["Plan rejected"])|join(" | ") }}</p></article>
+          {% endfor %}
+          {% for item in run.guardrail_summary.contradictions[:2] %}
+            <article class="insight-item"><p>{{ item.message or "Cross-stage contradiction" }}</p></article>
+          {% else %}
+            {% if not run.guardrail_summary.scope_issues and not run.guardrail_summary.scenario_rejections and not run.guardrail_summary.plan_rejections %}
+              <p class="empty-state">No guardrail rejection recorded for this run.</p>
+            {% endif %}
+          {% endfor %}
+        </div>
+        {% if run.guardrail_summary.unsupported_requested_surfaces or run.guardrail_summary.avoid_surfaces or run.guardrail_summary.instruction_conflicts %}
+          <div class="detail-chip-group">
+            {% for item in run.guardrail_summary.unsupported_requested_surfaces %}
+              <span class="badge badge-neutral">unsupported: {{ item }}</span>
+            {% endfor %}
+            {% for item in run.guardrail_summary.avoid_surfaces %}
+              <span class="badge badge-neutral">avoid: {{ item }}</span>
+            {% endfor %}
+            {% for item in run.guardrail_summary.instruction_conflicts %}
+              <span class="badge badge-failed">conflict: {{ item }}</span>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </section>
+    </div>
+  </article>
 </section>
 
 <section class="grid-two">
@@ -217,6 +419,81 @@
   </article>
 </section>
 
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Heatmap</p>
+      <h2>Domain knowledge intensity</h2>
+    </div>
+  </div>
+  <div class="heatmap-list">
+    {% for item in run.knowledge_heatmap %}
+      <div class="heatmap-row">
+        <span>{{ item.bucket }} • {{ item.kind }} • {{ item.label }}</span>
+        <div class="heatmap-bar"><i style="width: {{ (item.intensity * 100)|round(0)|int }}%"></i></div>
+      </div>
+    {% else %}
+      <p class="empty-state">No knowledge heatmap available for this run.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="grid-two">
+  <article class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Network</p>
+        <h2>API and request insight</h2>
+      </div>
+    </div>
+    <div class="insight-grid">
+      <section class="insight-card">
+        <div class="mini-stats">
+          <div><dt>Requests</dt><dd>{{ run.network_summary.request_count if run.network_summary else 0 }}</dd></div>
+          <div><dt>Responses</dt><dd>{{ run.network_summary.response_count if run.network_summary else 0 }}</dd></div>
+          <div><dt>Failing</dt><dd>{{ run.network_summary.failing_response_count if run.network_summary else 0 }}</dd></div>
+          <div><dt>APIs found</dt><dd>{{ run.raw_scan.apis|length if run.raw_scan and run.raw_scan.apis else 0 }}</dd></div>
+        </div>
+      </section>
+      <section class="insight-card">
+        <div class="insight-card-head"><h3>Top endpoints</h3></div>
+        <div class="insight-list">
+          {% for item in (run.network_summary.top_endpoints if run.network_summary else [])[:6] %}
+            <article class="insight-item">
+              <strong>{{ item.path }}</strong>
+              <p class="helper-text">hits {{ item.hits }}</p>
+            </article>
+          {% else %}
+            <p class="empty-state">Belum ada network activity yang terekam untuk run ini.</p>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+  </article>
+
+  <article class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Visual signature</p>
+        <h2>UI regression baseline</h2>
+      </div>
+    </div>
+    <div class="mini-stats">
+      <div><dt>Headings</dt><dd>{{ run.visual_signature.heading_count or 0 }}</dd></div>
+      <div><dt>Buttons</dt><dd>{{ run.visual_signature.button_count or 0 }}</dd></div>
+      <div><dt>Links</dt><dd>{{ run.visual_signature.link_count or 0 }}</dd></div>
+      <div><dt>Components</dt><dd>{{ run.visual_signature.component_count or 0 }}</dd></div>
+    </div>
+    <div class="artifact-groups">
+      {% for item in run.visual_signature.component_types[:10] %}
+        <span class="panel-badge">{{ item }}</span>
+      {% else %}
+        <p class="empty-state">Belum ada visual signature yang tersimpan.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
 <section class="grid-two">
   <article class="panel">
     <div class="panel-head">
@@ -389,7 +666,7 @@
           <th>Detail</th>
           {% if run.csv_rows %}
             {% for key in run.csv_rows[0].keys() %}
-              <th>{{ key }}</th>
+              <th class="col-{{ key|lower|replace(' ', '-') }}">{{ key }}</th>
             {% endfor %}
           {% endif %}
         </tr>
@@ -416,7 +693,7 @@
               <button type="button" class="row-toggle ghost-button" aria-expanded="false">View</button>
             </td>
             {% for key, value in row.fields %}
-              <td>
+              <td class="col-{{ key|lower|replace(' ', '-') }}">
                 {% set normalized = value|string %}
                 {% if key == "Automation" %}
                   {% if normalized|lower == "auto" %}
@@ -467,7 +744,7 @@
                     {% endfor %}
                   </ol>
                 {% else %}
-                  <div class="cell-text">{{ normalized }}</div>
+                  <div class="cell-text{% if key in ['Title', 'Precondition', 'Expected Result', 'Actual Result', 'Evidence'] %} cell-text-wide{% endif %}">{{ normalized }}</div>
                 {% endif %}
               </td>
             {% endfor %}
@@ -484,7 +761,7 @@
                     <div><dt>Type</dt><dd>{{ row.test_type or "-" }}</dd></div>
                   </dl>
                 </section>
-                <section class="detail-card">
+                <section class="detail-card detail-card-wide">
                   <h3>Precondition</h3>
                   <div class="detail-copy">{{ row.precondition or "-" }}</div>
                 </section>
@@ -539,6 +816,38 @@
                     </button>
                   </div>
                   <p class="helper-text">Gunakan ini untuk melatih AI apakah testcase ini memang sesuai dengan halaman.</p>
+                </section>
+                <section class="detail-card detail-card-wide">
+                  <h3>Fact grounding</h3>
+                  <div class="mini-stats compact-mini-stats">
+                    <div><dt>Scenario</dt><dd>{{ ((row.scenario_fact_coverage_score or 0) * 100)|round(0)|int }} / 100</dd></div>
+                    <div><dt>Plan steps</dt><dd>{{ ((row.plan_average_step_fact_coverage_score or 0) * 100)|round(0)|int }} / 100</dd></div>
+                    <div><dt>Execution</dt><dd>{{ ((row.result_grounding_score or 0) * 100)|round(0)|int }} / 100</dd></div>
+                    <div><dt>Contradictions</dt><dd>{{ row.contradiction_count or 0 }}</dd></div>
+                  </div>
+                  {% if row.fact_summary %}
+                    <p class="helper-text">{{ row.fact_summary }}</p>
+                  {% endif %}
+                  <div class="detail-chip-group">
+                    {% for item in row.scenario_fact_ids %}
+                      <span class="badge badge-info-soft">{{ item }}</span>
+                    {% else %}
+                      <span class="badge badge-neutral">no scenario fact ids</span>
+                    {% endfor %}
+                  </div>
+                  {% if row.mentioned_surfaces %}
+                    <p class="helper-text">Mentioned surfaces: {{ row.mentioned_surfaces|join(", ") }}</p>
+                  {% endif %}
+                  {% if row.covered_surfaces %}
+                    <p class="helper-text">Covered surfaces: {{ row.covered_surfaces|join(", ") }}</p>
+                  {% endif %}
+                  {% if row.contradiction_messages %}
+                    <div class="insight-list compact-list">
+                      {% for item in row.contradiction_messages[:3] %}
+                        <article class="insight-item"><p>{{ item }}</p></article>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
                 </section>
               </div>
             </td>

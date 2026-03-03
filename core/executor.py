@@ -29,7 +29,10 @@ class CodeGenerator:
         return f'''import csv
 import json
 import re
+import sys
+import unicodedata
 from pathlib import Path
+from urllib.parse import urlparse
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect, sync_playwright
@@ -45,11 +48,39 @@ RESULT_FILE = JSON_DIR / "Execution_Results.json"
 DEBUG_FILE = JSON_DIR / "Execution_Debug.json"
 LEARNING_FILE = JSON_DIR / "Execution_Learning.json"
 CHECKPOINT_FILE = JSON_DIR / "Execution_Checkpoints.json"
+NETWORK_FILE = JSON_DIR / "Execution_Network.json"
 DEFAULT_URL = {default_url!r}
 HEADLESS = {headless!r}
 STEP_DELAY_MS = 700
 SETTLE_DELAY_MS = 1000
 FINAL_DELAY_MS = 1400
+OVERLAY_LEAD_IN_MS = 220
+OVERLAY_HOLD_MS = 320
+
+
+def _cli_safe_text(value):
+    text = str(value or "")
+    replacements = {{
+        "\\u2013": "-",
+        "\\u2014": "-",
+        "\\u2018": "'",
+        "\\u2019": "'",
+        "\\u201c": '"',
+        "\\u201d": '"',
+        "\\u2026": "...",
+        "\\u2022": "*",
+        "\\u21b5": " -> ",
+    }}
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", errors="replace").decode("ascii")
+    return text
+
+
+def safe_print(*parts):
+    message = " ".join(_cli_safe_text(part) for part in parts)
+    print(message, flush=True)
 
 
 class ActionResolutionError(Exception):
@@ -72,8 +103,11 @@ class ActionEngine:
         self.step_delay_ms = int(self.settings.get("step_delay_ms", STEP_DELAY_MS))
         self.settle_delay_ms = int(self.settings.get("settle_delay_ms", SETTLE_DELAY_MS))
         self.final_delay_ms = int(self.settings.get("final_delay_ms", FINAL_DELAY_MS))
+        self.overlay_lead_in_ms = int(self.settings.get("overlay_lead_in_ms", OVERLAY_LEAD_IN_MS))
+        self.overlay_hold_ms = int(self.settings.get("overlay_hold_ms", OVERLAY_HOLD_MS))
         self.selector_memory = {{}}
         self.last_debug = {{}}
+        self.network_observer = {{"entries": [], "policy": {{}}, "expected_request_map": {{}}}}
 
     def execute(self, action):
         action_type = action.get("type")
@@ -204,6 +238,16 @@ class ActionEngine:
         elif assertion_type == "assert_url_contains":
             fragment = assertion.get("value", "")
             expect(self.page).to_have_url(re.compile(rf".*{{re.escape(fragment)}}.*", re.IGNORECASE))
+        elif assertion_type == "assert_network_seen":
+            self._assert_network_seen(assertion.get("value", ""))
+        elif assertion_type == "assert_network_status_ok":
+            self._assert_network_status_ok(assertion.get("value", ""))
+        elif assertion_type == "assert_graphql_ok":
+            self._assert_graphql_ok(assertion.get("value", ""))
+        elif assertion_type == "assert_endpoint_allowlist":
+            self._assert_endpoint_allowlist(assertion.get("value", ""))
+        elif assertion_type == "assert_cross_origin_safe":
+            self._assert_cross_origin_safe(assertion.get("value", ""))
 
     def goto(self, url):
         self.page.goto(url or DEFAULT_URL, wait_until="domcontentloaded", timeout=30000)
@@ -221,6 +265,43 @@ class ActionEngine:
             pass
         return contexts[:8]
 
+    def _container_candidate_locators(self, scope, action, target, resolver_kind):
+        candidates = []
+        target_regex = self._text_regex(target) if target else None
+        container_hints = [item for item in action.get("container_hints", []) if str(item or "").strip()]
+        nearby_texts = [item for item in action.get("nearby_texts", []) if str(item or "").strip()]
+        container_selector = "form, section, article, main, aside, nav, li, td, [role='dialog'], [role='region'], [class*='card' i], [class*='drawer' i], [data-testid*='section' i]"
+        search_selector = "input, textarea, select, [contenteditable='true'], [role='combobox'], [role='textbox']"
+        click_selector = "button, a, [role='button'], [role='tab'], [role='menuitem']"
+
+        for hint in container_hints[:5]:
+            fuzzy_hint = self._text_regex(hint)
+            container = scope.locator(container_selector).filter(has_text=fuzzy_hint)
+            if resolver_kind in {{"field", "select", "upload"}}:
+                if target_regex:
+                    if resolver_kind == "field":
+                        candidates.extend(self._scoped_attribute_token_locators(container, ("input", "textarea", "select"), target, f"container-field:{{hint}}"))
+                    elif resolver_kind == "select":
+                        candidates.extend(self._scoped_attribute_token_locators(container, ("select",), target, f"container-select:{{hint}}"))
+                    elif resolver_kind == "upload":
+                        candidates.append((container.locator('input[type="file"]'), f"container-upload:{{hint}}"))
+                    candidates.append((container.locator("label").filter(has_text=target_regex).locator("xpath=following::input[1]"), f"container-label-input:{{hint}}"))
+                    candidates.append((container.locator("label").filter(has_text=target_regex).locator("xpath=following::textarea[1]"), f"container-label-textarea:{{hint}}"))
+                    candidates.append((container.locator("label").filter(has_text=target_regex).locator("xpath=following::select[1]"), f"container-label-select:{{hint}}"))
+                    candidates.append((container.locator("label").filter(has_text=target_regex).locator("xpath=following::*[@contenteditable='true'][1]"), f"container-label-editor:{{hint}}"))
+            else:
+                if target_regex:
+                    candidates.append((container.locator(click_selector).filter(has_text=target_regex), f"container-click-text:{{hint}}"))
+        for text in nearby_texts[:4]:
+            fuzzy_text = self._text_regex(text)
+            if resolver_kind in {{"field", "select", "upload"}}:
+                candidates.append((scope.locator("label, span, div, p").filter(has_text=fuzzy_text).locator("xpath=following::input[1]"), f"nearby-input:{{text}}"))
+                candidates.append((scope.locator("label, span, div, p").filter(has_text=fuzzy_text).locator("xpath=following::textarea[1]"), f"nearby-textarea:{{text}}"))
+                candidates.append((scope.locator("label, span, div, p").filter(has_text=fuzzy_text).locator("xpath=following::select[1]"), f"nearby-select:{{text}}"))
+            else:
+                candidates.append((scope.locator(click_selector).filter(has_text=fuzzy_text), f"nearby-click:{{text}}"))
+        return candidates
+
     def _resolve_field(self, action):
         field_name = action.get("target", "")
         slug = self._slug(field_name)
@@ -228,8 +309,9 @@ class ActionEngine:
         dashed = slug.replace("_", "-")
         fuzzy = self._text_regex(field_name)
         debug = self._build_resolution_debug("field", action)
-        candidates = self._selector_candidate_locators(action.get("selector_candidates", []))
+        candidates = self._selector_candidate_locators(self._merge_unique(action.get("learned_path_hints", []), action.get("selector_candidates", [])))
         for context_name, scope in self._iter_contexts():
+            candidates.extend([(locator, f"{{context_name}}|{{description}}") for locator, description in self._container_candidate_locators(scope, action, field_name, "field")])
             for alias in self._field_text_candidates(action):
                 candidates.extend([
                     (scope.get_by_label(alias, exact=False), f"{{context_name}}|label:{{alias}}"),
@@ -269,8 +351,10 @@ class ActionEngine:
     def _resolve_click_target(self, label, role_hint, action=None):
         fuzzy = self._text_regex(label)
         debug = {{"resolver": "click_target", "target": label, "role_hint": role_hint}}
-        candidates = self._selector_candidate_locators((action or {{}}).get("selector_candidates", []))
+        action = action or {{}}
+        candidates = self._selector_candidate_locators(self._merge_unique(action.get("learned_path_hints", []), action.get("selector_candidates", [])))
         for context_name, scope in self._iter_contexts():
+            candidates.extend([(locator, f"{{context_name}}|{{description}}") for locator, description in self._container_candidate_locators(scope, action, label, "click")])
             if role_hint == "link":
                 candidates.extend([
                     (scope.get_by_role("link", name=label, exact=False), f"{{context_name}}|role=link:{{label}}"),
@@ -308,8 +392,9 @@ class ActionEngine:
         dashed = slug.replace("_", "-")
         fuzzy = self._text_regex(field_name)
         debug = self._build_resolution_debug("select", action)
-        candidates = self._selector_candidate_locators(action.get("selector_candidates", []))
+        candidates = self._selector_candidate_locators(self._merge_unique(action.get("learned_path_hints", []), action.get("selector_candidates", [])))
         for context_name, scope in self._iter_contexts():
+            candidates.extend([(locator, f"{{context_name}}|{{description}}") for locator, description in self._container_candidate_locators(scope, action, field_name, "select")])
             for alias in self._field_text_candidates(action):
                 candidates.extend([
                     (scope.get_by_label(alias, exact=False), f"{{context_name}}|label:{{alias}}"),
@@ -337,8 +422,9 @@ class ActionEngine:
         target = action.get("target", "")
         fuzzy = self._text_regex(target)
         debug = self._build_resolution_debug("upload", action)
-        candidates = self._selector_candidate_locators(action.get("selector_candidates", []))
+        candidates = self._selector_candidate_locators(self._merge_unique(action.get("learned_path_hints", []), action.get("selector_candidates", [])))
         for context_name, scope in self._iter_contexts():
+            candidates.extend([(locator, f"{{context_name}}|{{description}}") for locator, description in self._container_candidate_locators(scope, action, target, "upload")])
             candidates.extend([
                 (scope.locator('input[type="file"]'), f'{{context_name}}|input[type="file"]'),
                 (scope.locator('[data-testid*="upload" i]'), f'{{context_name}}|[data-testid*=upload]'),
@@ -353,7 +439,18 @@ class ActionEngine:
         for candidate, description in candidates:
             attempted.append(description)
             try:
-                if candidate.count():
+                count = candidate.count()
+                if count:
+                    resolved = None
+                    for index in range(min(count, 3)):
+                        probe = candidate.nth(index)
+                        try:
+                            if probe.is_visible():
+                                resolved = probe
+                                break
+                        except Exception:
+                            continue
+                    resolved = resolved or candidate.first
                     selector_hint = description.split("|", 1)[1] if "|" in description else description
                     self.selector_memory["last_selector"] = selector_hint
                     history = self.selector_memory.setdefault("successful_selectors", [])
@@ -367,7 +464,7 @@ class ActionEngine:
                         "resolved_selector": selector_hint,
                         "attempted": attempted[:20],
                     }}
-                    return candidate.first
+                    return resolved
             except Exception:
                 continue
         self.last_debug = {{**debug, "attempted": attempted[:20]}}
@@ -458,6 +555,16 @@ class ActionEngine:
                     locators.append((scope.locator(f'{{tag}}[id*="{{token}}" i]'), f'{{context_name}}|{{tag}}[id*="{{token}}" i]'))
                     locators.append((scope.locator(f'{{tag}}[placeholder*="{{token}}" i]'), f'{{context_name}}|{{tag}}[placeholder*="{{token}}" i]'))
                     locators.append((scope.locator(f'{{tag}}[aria-label*="{{token}}" i]'), f'{{context_name}}|{{tag}}[aria-label*="{{token}}" i]'))
+        return locators
+
+    def _scoped_attribute_token_locators(self, scope, tags, value, prefix):
+        locators = []
+        for token in self._tokens(value):
+            for tag in tags:
+                locators.append((scope.locator(f'{{tag}}[name*="{{token}}" i]'), f'{{prefix}}|{{tag}}[name*="{{token}}" i]'))
+                locators.append((scope.locator(f'{{tag}}[id*="{{token}}" i]'), f'{{prefix}}|{{tag}}[id*="{{token}}" i]'))
+                locators.append((scope.locator(f'{{tag}}[placeholder*="{{token}}" i]'), f'{{prefix}}|{{tag}}[placeholder*="{{token}}" i]'))
+                locators.append((scope.locator(f'{{tag}}[aria-label*="{{token}}" i]'), f'{{prefix}}|{{tag}}[aria-label*="{{token}}" i]'))
         return locators
 
     def _build_resolution_debug(self, resolver, action):
@@ -559,6 +666,85 @@ class ActionEngine:
                 last_error = exc
         raise AssertionError(f"None of the expected texts were visible: {{values}}") from last_error
 
+    def _assert_network_seen(self, expected):
+        summary = summarize_network_entries(self.network_observer.get("entries", []))
+        if not summary.get("request_count"):
+            raise AssertionError("No network activity was captured for this test case.")
+        target = str(expected or "").strip().lower()
+        if not target:
+            return
+        for item in self.network_observer.get("entries", []):
+            haystack = f"{{item.get('url', '')}} {{item.get('resource_type', '')}} {{item.get('method', '')}}".lower()
+            if target in haystack:
+                return
+        raise AssertionError(f"Expected network activity matching '{{expected}}' was not observed.")
+
+    def _assert_network_status_ok(self, expected):
+        entries = [item for item in self.network_observer.get("entries", []) if item.get("event") == "response"]
+        if not entries:
+            raise AssertionError("No network responses were captured for this test case.")
+        target = str(expected or "").strip().lower()
+        if target:
+            entries = [
+                item for item in entries
+                if target in f"{{item.get('url', '')}} {{item.get('resource_type', '')}}".lower()
+            ]
+        if not entries:
+            raise AssertionError(f"No response matched the expected network target '{{expected}}'.")
+        if any(int(item.get("status", 0) or 0) >= 400 for item in entries):
+            raise AssertionError(f"Observed failing network status for '{{expected}}'.")
+        if any(item.get("logical_error") for item in entries):
+            raise AssertionError(f"Observed logical API error payload for '{{expected}}'.")
+
+    def _assert_graphql_ok(self, expected):
+        entries = [item for item in self.network_observer.get("entries", []) if item.get("event") == "response" and item.get("is_graphql")]
+        if not entries:
+            raise AssertionError("No GraphQL responses were captured for this test case.")
+        target = str(expected or "").strip().lower()
+        if target:
+            entries = [item for item in entries if target in f"{{item.get('url', '')}} {{item.get('graphql_operation', '')}}".lower()]
+        if not entries:
+            raise AssertionError(f"No GraphQL response matched '{{expected}}'.")
+        if any(item.get("graphql_error") for item in entries):
+            raise AssertionError(f"GraphQL response contained errors for '{{expected}}'.")
+
+    def _assert_endpoint_allowlist(self, expected):
+        summary = summarize_network_entries(self.network_observer.get("entries", []))
+        allowlist = list(self.network_observer.get("policy", {{}}).get("allowed_endpoint_tokens", []))
+        allowlist.extend(self.network_observer.get("expected_request_map", {{}}).get("expected_endpoints", []))
+        allowlist = [str(item or "").strip().lower() for item in allowlist if str(item or "").strip()]
+        if expected and expected.lower() not in {{"allowlist", "same-origin"}}:
+            allowlist.append(str(expected).strip().lower())
+        if not allowlist:
+            return
+        unexpected = []
+        for item in self.network_observer.get("entries", []):
+            if item.get("event") != "response" or not item.get("same_origin", False):
+                continue
+            path = str(item.get("path", "") or urlparse(item.get("url", "")).path).lower()
+            if path and not any(token in path for token in allowlist):
+                unexpected.append(path)
+        if unexpected:
+            raise AssertionError(f"Observed endpoint outside allowlist: {{unexpected[0]}}")
+        if summary.get("unexpected_host_count", 0) > 0:
+            raise AssertionError("Observed response from unexpected host outside allowlist.")
+
+    def _assert_cross_origin_safe(self, expected):
+        policy = self.network_observer.get("policy", {{}})
+        mode = str(policy.get("cross_origin_mode", "same-origin")).strip().lower()
+        summary = summarize_network_entries(self.network_observer.get("entries", []))
+        if mode == "allow-all":
+            return
+        if summary.get("unexpected_host_count", 0) > 0:
+            raise AssertionError("Unexpected cross-origin network request detected.")
+
+    def bind_network_observer(self, entries, policy=None, expected_request_map=None):
+        self.network_observer = {{
+            "entries": entries,
+            "policy": policy or {{}},
+            "expected_request_map": expected_request_map or {{}},
+        }}
+
     def capture_runtime_state(self):
         try:
             return self.page.evaluate(
@@ -628,13 +814,16 @@ class ActionEngine:
             self.page.wait_for_load_state("networkidle", timeout=3000)
         except Exception:
             pass
-        delay = self.final_delay_ms if action.get("type") in {"click", "dismiss"} else self.settle_delay_ms
+        delay = self.final_delay_ms if action.get("type") in {{"click", "dismiss"}} else self.settle_delay_ms
         if self.settings.get("watch_live_updates"):
             delay += 300
         self.page.wait_for_timeout(delay)
 
 
 def describe_action(action):
+    step_text = str(action.get("step_text", "")).strip()
+    if step_text:
+        return step_text
     action_type = action.get("type", "")
     target = action.get("target", "")
     value = action.get("value", "")
@@ -649,6 +838,11 @@ def describe_action(action):
         suffix = f" {{role}}" if role else ""
         return f"Click '{{target}}'{{suffix}}".strip()
     return f"Inspect '{{target}}'"
+
+
+def format_step_overlay(test_id, phase_label, index, total, action):
+    detail = _cli_safe_text(describe_action(action))
+    return f"Test: {{test_id}}\\n{{phase_label}} {{index}}/{{total}}\\n{{detail}}"
 
 
 def load_execution_plan():
@@ -674,6 +868,145 @@ def save_json(path, payload):
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def summarize_network_entries(entries):
+    requests = [item for item in entries if item.get("event") == "request"]
+    responses = [item for item in entries if item.get("event") == "response"]
+    failing = [item for item in responses if int(item.get("status", 0) or 0) >= 400]
+    graphql_errors = [item for item in responses if item.get("graphql_error")]
+    unexpected_hosts = [item for item in requests + responses if item.get("unexpected_host")]
+    endpoint_hits = {{}}
+    host_hits = {{}}
+    for item in responses[:80]:
+        url = str(item.get("url", ""))
+        path = urlparse(url).path or url
+        host = urlparse(url).netloc or ""
+        endpoint_hits[path] = endpoint_hits.get(path, 0) + 1
+        if host:
+            host_hits[host] = host_hits.get(host, 0) + 1
+    return {{
+        "request_count": len(requests),
+        "response_count": len(responses),
+        "failing_response_count": len(failing),
+        "graphql_error_count": len(graphql_errors),
+        "unexpected_host_count": len(unexpected_hosts),
+        "top_endpoints": [
+            {{"path": key, "hits": value}}
+            for key, value in sorted(endpoint_hits.items(), key=lambda entry: (-entry[1], entry[0]))[:8]
+        ],
+        "top_hosts": [
+            {{"host": key, "hits": value}}
+            for key, value in sorted(host_hits.items(), key=lambda entry: (-entry[1], entry[0]))[:6]
+        ],
+    }}
+
+
+def wire_network_capture(page, bucket, base_url, network_policy=None):
+    policy = network_policy or {{}}
+    host = urlparse(base_url or DEFAULT_URL).netloc.lower()
+    allowed_hosts = {{item.lower() for item in policy.get("allowed_hosts", []) if str(item or "").strip()}}
+    if host:
+        allowed_hosts.add(host)
+    graphql_error_keys = [str(item or "").strip().lower() for item in policy.get("graphql_error_keys", []) if str(item or "").strip()]
+    if not graphql_error_keys:
+        graphql_error_keys = ["errors", "error", "extensions"]
+
+    def host_state(url):
+        parsed = urlparse(url)
+        if not parsed.netloc:
+            return True, True, False
+        normalized = parsed.netloc.lower()
+        same_origin = normalized == host
+        allowed_host = normalized in allowed_hosts
+        unexpected_host = not same_origin and not allowed_host
+        return same_origin, allowed_host, unexpected_host
+
+    def on_request(request):
+        try:
+            url = request.url
+            same_origin, allowed_host, unexpected_host = host_state(url)
+            bucket.append(
+                {{
+                    "event": "request",
+                    "method": request.method,
+                    "url": url,
+                    "path": urlparse(url).path or url,
+                    "host": urlparse(url).netloc,
+                    "resource_type": request.resource_type,
+                    "same_origin": same_origin,
+                    "allowed_host": allowed_host,
+                    "unexpected_host": unexpected_host,
+                }}
+            )
+        except Exception:
+            return
+
+    def on_response(response):
+        try:
+            url = response.url
+            same_origin, allowed_host, unexpected_host = host_state(url)
+            request = response.request
+            content_type = response.headers.get("content-type", "") if getattr(response, "headers", None) else ""
+            logical_error = False
+            graphql_error = False
+            graphql_operation = ""
+            if same_origin or allowed_host:
+                try:
+                    post_data = request.post_data if request else ""
+                    if post_data:
+                        graphql_operation = re.search(r'"operationName"\\s*:\\s*"([^"]+)"', post_data)
+                        graphql_operation = graphql_operation.group(1) if graphql_operation else ""
+                    is_graphql = "graphql" in url.lower() or "graphql" in content_type.lower() or bool(graphql_operation)
+                    preview = ""
+                    if "json" in content_type.lower() or is_graphql:
+                        try:
+                            preview = response.text()[:1200]
+                        except Exception:
+                            preview = ""
+                    if preview:
+                        lowered_preview = preview.lower()
+                        logical_error = any(token in lowered_preview for token in ['"success":false', '"ok":false', '"error":true'])
+                        if is_graphql:
+                            graphql_error = any(token in lowered_preview for token in graphql_error_keys)
+                except Exception:
+                    pass
+            bucket.append(
+                {{
+                    "event": "response",
+                    "method": request.method if request else "",
+                    "url": url,
+                    "path": urlparse(url).path or url,
+                    "host": urlparse(url).netloc,
+                    "resource_type": request.resource_type if request else "",
+                    "status": response.status,
+                    "same_origin": same_origin,
+                    "allowed_host": allowed_host,
+                    "unexpected_host": unexpected_host,
+                    "logical_error": logical_error,
+                    "is_graphql": "graphql" in url.lower() or bool(graphql_operation),
+                    "graphql_error": graphql_error,
+                    "graphql_operation": graphql_operation,
+                }}
+            )
+        except Exception:
+            return
+
+    page.on("request", on_request)
+    page.on("response", on_response)
+    return on_request, on_response
+
+
+def detach_network_capture(page, handlers):
+    request_handler, response_handler = handlers
+    try:
+        page.remove_listener("request", request_handler)
+    except Exception:
+        pass
+    try:
+        page.remove_listener("response", response_handler)
+    except Exception:
+        pass
+
+
 def build_learning_entry(test_id, plan, engine, status, error_message):
     return {{
         "id": test_id,
@@ -685,6 +1018,8 @@ def build_learning_entry(test_id, plan, engine, status, error_message):
         "attempted": engine.last_debug.get("attempted", []),
         "details": engine.last_debug,
         "runtime_state": engine.capture_runtime_state(),
+        "fact_ids": list(plan.get("scenario_grounding", {{}}).get("fact_ids", [])),
+        "grounding_score": float(plan.get("scenario_grounding", {{}}).get("score", 0.0) or 0.0),
     }}
 
 
@@ -716,8 +1051,9 @@ def run_tests():
     debug_entries = []
     learning_entries = []
     checkpoint_entries = []
+    network_entries = []
 
-    print(f"Plans found: {{len(test_plans)}}")
+    safe_print(f"Plans found: {{len(test_plans)}}")
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=HEADLESS)
         try:
@@ -726,14 +1062,14 @@ def run_tests():
                 automation = plan.get("automation", "auto")
                 orchestration = plan.get("orchestration", {{}})
                 session_strategy = plan.get("session_strategy", {{}})
-                print(f"--- Running: {{test_id}} ---")
+                safe_print(f"--- Running: {{test_id}} ---")
                 if automation == "manual":
-                    print(f"  [Skip] {{test_id}} is marked manual.")
+                    safe_print(f"  [Skip] {{test_id}} is marked manual.")
                     results.append({{"id": test_id, "title": plan.get("title", ""), "status": "skipped", "error": "", "automation": automation}})
                     continue
                 if session_strategy.get("requires_session") and not storage_state:
                     message = "Authenticated session required. Provide auth/auth_state.json or site-profile storage state."
-                    print(f"  [Checkpoint] {{test_id}} requires session: {{message}}")
+                    safe_print(f"  [Checkpoint] {{test_id}} requires session: {{message}}")
                     results.append({{"id": test_id, "title": plan.get("title", ""), "status": "checkpoint_required", "error": message, "automation": automation}})
                     checkpoint_entries.append({{"id": test_id, "type": "session", "mode": "manual", "reason": message}})
                     continue
@@ -743,13 +1079,25 @@ def run_tests():
                     context_kwargs["storage_state"] = storage_state
                 context = browser.new_context(**context_kwargs)
                 page = context.new_page()
+                test_network = []
+                network_policy = execution_plan.get("network_policy", {{}})
+                expected_request_map = plan.get("expected_request_map", {{}})
+                network_handlers = wire_network_capture(
+                    page,
+                    test_network,
+                    plan.get("target_url") or execution_plan.get("base_url") or DEFAULT_URL,
+                    network_policy,
+                )
                 plan_settings = {{
                     "step_delay_ms": int(plan.get("interaction_hints", {{}}).get("step_delay_ms", execution_settings.get("step_delay_ms", STEP_DELAY_MS))),
                     "settle_delay_ms": int(plan.get("interaction_hints", {{}}).get("settle_delay_ms", execution_settings.get("settle_delay_ms", SETTLE_DELAY_MS))),
                     "final_delay_ms": int(plan.get("interaction_hints", {{}}).get("final_delay_ms", execution_settings.get("final_delay_ms", FINAL_DELAY_MS))),
+                    "overlay_lead_in_ms": int(plan.get("interaction_hints", {{}}).get("overlay_lead_in_ms", execution_settings.get("overlay_lead_in_ms", OVERLAY_LEAD_IN_MS))),
+                    "overlay_hold_ms": int(plan.get("interaction_hints", {{}}).get("overlay_hold_ms", execution_settings.get("overlay_hold_ms", OVERLAY_HOLD_MS))),
                     "watch_live_updates": bool(plan.get("interaction_hints", {{}}).get("watch_live_updates", False)),
                 }}
                 engine = ActionEngine(page, settings=plan_settings)
+                engine.bind_network_observer(test_network, network_policy, expected_request_map)
                 status = "passed"
                 error_message = ""
 
@@ -757,49 +1105,71 @@ def run_tests():
                     engine.goto(plan.get("target_url") or execution_plan.get("base_url") or DEFAULT_URL)
                     pre_actions = plan.get("pre_actions", [])
                     for index, action in enumerate(pre_actions, start=1):
-                        engine.show_step_overlay(f"Test: {{test_id}}\\nPreparation {{index}}/{{len(pre_actions)}}\\n{{describe_action(action)}}")
-                        page.wait_for_timeout(engine.step_delay_ms)
+                        engine.show_step_overlay(format_step_overlay(test_id, "Preparation", index, len(pre_actions), action))
+                        page.wait_for_timeout(engine.overlay_lead_in_ms)
                         engine.execute(action)
                         engine.settle_after_action(action)
+                        page.wait_for_timeout(engine.overlay_hold_ms)
                     actions = plan.get("actions", [])
                     for index, action in enumerate(actions, start=1):
-                        engine.show_step_overlay(f"Test: {{test_id}}\\nStep {{index}}/{{len(actions)}}\\n{{describe_action(action)}}")
-                        page.wait_for_timeout(engine.step_delay_ms)
+                        engine.show_step_overlay(format_step_overlay(test_id, "Step", index, len(actions), action))
+                        page.wait_for_timeout(engine.overlay_lead_in_ms)
                         engine.execute(action)
                         engine.settle_after_action(action)
+                        page.wait_for_timeout(engine.overlay_hold_ms)
                     if orchestration.get("mode") == "semi-auto" and plan.get("checkpoints"):
                         raise CheckpointRequiredError(plan.get("checkpoints")[0])
                     for assertion in plan.get("assertions", []):
                         engine.show_step_overlay(f"Test: {{test_id}}\\nAssertion\\n{{assertion.get('type', '')}}")
-                        page.wait_for_timeout(engine.step_delay_ms)
+                        page.wait_for_timeout(engine.overlay_lead_in_ms)
                         engine.assert_expectation(assertion)
+                        page.wait_for_timeout(engine.overlay_hold_ms)
                     engine.clear_step_overlay()
                     page.wait_for_timeout(engine.final_delay_ms)
-                    print(f"  [Pass] {{test_id}} done.")
+                    safe_print(f"  [Pass] {{test_id}} done.")
                 except CheckpointRequiredError as exc:
                     status = "checkpoint_required"
                     error_message = str(exc)
-                    print(f"  [Checkpoint] {{test_id}}: {{exc}}")
+                    safe_print(f"  [Checkpoint] {{test_id}}: {{exc}}")
                     checkpoint_entries.append({{"id": test_id, **exc.checkpoint, "details": engine.last_debug}})
                     debug_entries.append({{"id": test_id, "stage": "checkpoint", "details": engine.last_debug, "error": str(exc)}})
                 except PlaywrightTimeoutError as exc:
                     status = "failed"
                     error_message = f"timeout: {{exc}}"
-                    print(f"  [Error] {{test_id}} timeout: {{exc}}")
+                    safe_print(f"  [Error] {{test_id}} timeout: {{exc}}")
                     debug_entries.append({{"id": test_id, "stage": "timeout", "details": engine.last_debug}})
                 except ActionResolutionError as exc:
                     status = "failed"
                     error_message = str(exc)
-                    print(f"  [Error] {{test_id}} failed: {{exc}}")
+                    safe_print(f"  [Error] {{test_id}} failed: {{exc}}")
                     debug_entries.append({{"id": test_id, "stage": "resolution", "details": exc.debug}})
                 except Exception as exc:
                     status = "failed"
                     error_message = str(exc)
-                    print(f"  [Error] {{test_id}} failed: {{exc}}")
+                    safe_print(f"  [Error] {{test_id}} failed: {{exc}}")
                     debug_entries.append({{"id": test_id, "stage": "runtime", "details": engine.last_debug, "error": str(exc)}})
                 finally:
-                    results.append({{"id": test_id, "title": plan.get("title", ""), "status": status, "error": error_message, "automation": automation}})
+                    detach_network_capture(page, network_handlers)
+                    network_summary = summarize_network_entries(test_network)
+                    results.append({{
+                        "id": test_id,
+                        "title": plan.get("title", ""),
+                        "status": status,
+                        "error": error_message,
+                        "automation": automation,
+                        "network_summary": network_summary,
+                        "fact_ids": list(plan.get("scenario_grounding", {{}}).get("fact_ids", [])),
+                        "grounding_score": float(plan.get("scenario_grounding", {{}}).get("score", 0.0) or 0.0),
+                    }})
                     learning_entries.append(build_learning_entry(test_id, plan, engine, status, error_message))
+                    network_entries.append({{
+                        "id": test_id,
+                        "title": plan.get("title", ""),
+                        "entries": test_network[:120],
+                        "summary": network_summary,
+                        "policy": network_policy,
+                        "expected_request_map": expected_request_map,
+                    }})
                     finalize_video(page, context, test_id)
         finally:
             browser.close()
@@ -807,6 +1177,7 @@ def run_tests():
     save_json(DEBUG_FILE, {{"debug_entries": debug_entries}})
     save_json(LEARNING_FILE, {{"learning_entries": learning_entries}})
     save_json(CHECKPOINT_FILE, {{"checkpoints": checkpoint_entries}})
+    save_json(NETWORK_FILE, {{"network_entries": network_entries}})
 
 
 if __name__ == "__main__":

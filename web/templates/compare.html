@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+{% block title %}Compare runs | QA Agent{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Comparison</p>
+      <h1>Run comparison</h1>
+    </div>
+    <div class="metric-inline">
+      <span>{{ metrics.runs }} runs</span>
+      <span>{{ metrics.cases }} cases</span>
+      <span>{{ metrics.videos }} videos</span>
+    </div>
+  </div>
+  <form class="filter-toolbar" action="{{ url_for('compare_runs') }}" method="get">
+    <label class="filter-field">
+      <span>Left run</span>
+      <select name="left">
+        <option value="">Select run</option>
+        {% for run in runs %}
+          <option value="{{ run.run_name }}" {% if run.run_name == left %}selected{% endif %}>{{ run.run_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="filter-field">
+      <span>Right run</span>
+      <select name="right">
+        <option value="">Select run</option>
+        {% for run in runs %}
+          <option value="{{ run.run_name }}" {% if run.run_name == right %}selected{% endif %}>{{ run.run_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="filter-field">
+      <span>Action</span>
+      <button class="primary-button" type="submit">Compare</button>
+    </div>
+  </form>
+</section>
+
+{% if comparison %}
+  <section class="grid-two comparison-grid">
+    <article class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Left baseline</p>
+          <h2>{{ comparison.left.run_name }}</h2>
+        </div>
+        <span class="confidence">{{ comparison.left.confidence_score }}</span>
+      </div>
+      <dl class="mini-stats">
+        <div><dt>Page type</dt><dd>{{ comparison.left.page_type or "-" }}</dd></div>
+        <div><dt>Cases</dt><dd>{{ comparison.left.total_cases }}</dd></div>
+        <div><dt>Passed</dt><dd>{{ comparison.left.status_counts.passed or 0 }}</dd></div>
+        <div><dt>Failed</dt><dd>{{ comparison.left.status_counts.failed or 0 }}</dd></div>
+      </dl>
+      <a class="inline-link" href="{{ url_for('run_detail', run_name=comparison.left.run_name) }}">Open left run</a>
+    </article>
+
+    <article class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Right candidate</p>
+          <h2>{{ comparison.right.run_name }}</h2>
+        </div>
+        <span class="confidence">{{ comparison.right.confidence_score }}</span>
+      </div>
+      <dl class="mini-stats">
+        <div><dt>Page type</dt><dd>{{ comparison.right.page_type or "-" }}</dd></div>
+        <div><dt>Cases</dt><dd>{{ comparison.right.total_cases }}</dd></div>
+        <div><dt>Passed</dt><dd>{{ comparison.right.status_counts.passed or 0 }}</dd></div>
+        <div><dt>Failed</dt><dd>{{ comparison.right.status_counts.failed or 0 }}</dd></div>
+      </dl>
+      <a class="inline-link" href="{{ url_for('run_detail', run_name=comparison.right.run_name) }}">Open right run</a>
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Delta</p>
+        <h2>What changed</h2>
+      </div>
+    </div>
+    <div class="metric-grid">
+      <article class="metric-card metric-card-info">
+        <span>Confidence delta</span>
+        <strong>{% if comparison.delta.confidence > 0 %}+{% endif %}{{ comparison.delta.confidence }}</strong>
+      </article>
+      <article class="metric-card metric-card-pass">
+        <span>Passed delta</span>
+        <strong>{% if comparison.delta.passed > 0 %}+{% endif %}{{ comparison.delta.passed }}</strong>
+      </article>
+      <article class="metric-card metric-card-fail">
+        <span>Failed delta</span>
+        <strong>{% if comparison.delta.failed > 0 %}+{% endif %}{{ comparison.delta.failed }}</strong>
+      </article>
+      <article class="metric-card metric-card-info">
+        <span>Case delta</span>
+        <strong>{% if comparison.delta.cases > 0 %}+{% endif %}{{ comparison.delta.cases }}</strong>
+      </article>
+    </div>
+  </section>
+
+  <section class="grid-two comparison-grid">
+    <article class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Confidence signals</p>
+          <h2>Signal deltas</h2>
+        </div>
+      </div>
+      <dl class="mini-stats">
+        <div><dt>Source trust</dt><dd>{% if comparison.confidence_diff.source_trust > 0 %}+{% endif %}{{ comparison.confidence_diff.source_trust }}</dd></div>
+        <div><dt>Stability</dt><dd>{% if comparison.confidence_diff.stability > 0 %}+{% endif %}{{ comparison.confidence_diff.stability }}</dd></div>
+        <div><dt>Real-world</dt><dd>{% if comparison.confidence_diff.real_world > 0 %}+{% endif %}{{ comparison.confidence_diff.real_world }}</dd></div>
+        <div><dt>Negative evidence</dt><dd>{% if comparison.confidence_diff.negative_evidence > 0 %}+{% endif %}{{ comparison.confidence_diff.negative_evidence }}</dd></div>
+        <div><dt>Anti-hallu</dt><dd>{% if comparison.confidence_diff.anti_hallucination > 0 %}+{% endif %}{{ comparison.confidence_diff.anti_hallucination }}</dd></div>
+        <div><dt>Contradictions</dt><dd>{% if comparison.anti_hallu_delta.contradictions > 0 %}+{% endif %}{{ comparison.anti_hallu_delta.contradictions }}</dd></div>
+      </dl>
+    </article>
+
+    <article class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Confidence notes</p>
+          <h2>Left vs right rationale</h2>
+        </div>
+      </div>
+      <div class="insight-grid">
+        <section class="insight-card">
+          <div class="insight-card-head"><h3>{{ comparison.left.run_name }}</h3></div>
+          <div class="insight-list">
+            {% for item in comparison.left.confidence_explanation[:4] %}
+              <article class="insight-item"><p>{{ item }}</p></article>
+            {% else %}
+              <p class="empty-state">No explanation available.</p>
+            {% endfor %}
+          </div>
+        </section>
+        <section class="insight-card">
+          <div class="insight-card-head"><h3>{{ comparison.right.run_name }}</h3></div>
+          <div class="insight-list">
+            {% for item in comparison.right.confidence_explanation[:4] %}
+              <article class="insight-item"><p>{{ item }}</p></article>
+            {% else %}
+              <p class="empty-state">No explanation available.</p>
+            {% endfor %}
+          </div>
+        </section>
+      </div>
+    </article>
+  </section>
+
+  <section class="grid-two comparison-grid">
+    <article class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Visual diff</p>
+          <h2>UI signature changes</h2>
+        </div>
+      </div>
+      <dl class="mini-stats">
+        <div><dt>Headings</dt><dd>{% if comparison.visual_diff.heading_delta > 0 %}+{% endif %}{{ comparison.visual_diff.heading_delta }}</dd></div>
+        <div><dt>Buttons</dt><dd>{% if comparison.visual_diff.button_delta > 0 %}+{% endif %}{{ comparison.visual_diff.button_delta }}</dd></div>
+        <div><dt>Links</dt><dd>{% if comparison.visual_diff.link_delta > 0 %}+{% endif %}{{ comparison.visual_diff.link_delta }}</dd></div>
+        <div><dt>Components</dt><dd>{% if comparison.visual_diff.component_delta > 0 %}+{% endif %}{{ comparison.visual_diff.component_delta }}</dd></div>
+        <div><dt>States</dt><dd>{% if comparison.visual_diff.state_delta > 0 %}+{% endif %}{{ comparison.visual_diff.state_delta }}</dd></div>
+      </dl>
+      <div class="artifact-groups">
+        {% for item in comparison.visual_diff.changed_component_types %}
+          <span class="panel-badge">{{ item }}</span>
+        {% else %}
+          <p class="empty-state">No component type change detected.</p>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">Case delta</p>
+          <h2>Coverage changes</h2>
+        </div>
+      </div>
+      <div class="insight-grid">
+        <section class="insight-card">
+          <div class="insight-card-head"><h3>New cases</h3></div>
+          <div class="artifact-groups">
+            {% for case_id in comparison.new_case_ids %}
+              <span class="panel-badge">{{ case_id }}</span>
+            {% else %}
+              <p class="empty-state">No new case IDs.</p>
+            {% endfor %}
+          </div>
+        </section>
+        <section class="insight-card">
+          <div class="insight-card-head"><h3>Missing cases</h3></div>
+          <div class="artifact-groups">
+            {% for case_id in comparison.missing_case_ids %}
+              <span class="panel-badge">{{ case_id }}</span>
+            {% else %}
+              <p class="empty-state">No missing case IDs.</p>
+            {% endfor %}
+          </div>
+        </section>
+      </div>
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Changed cases</p>
+        <h2>Status and automation changes</h2>
+      </div>
+    </div>
+    <div class="table-shell">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Before status</th>
+            <th>After status</th>
+            <th>Before automation</th>
+            <th>After automation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in comparison.changed_cases %}
+            <tr>
+              <td>{{ item.id }}</td>
+              <td>{{ item.title or "-" }}</td>
+              <td>{{ item.before_status or "-" }}</td>
+              <td>{{ item.after_status or "-" }}</td>
+              <td>{{ item.before_automation or "-" }}</td>
+              <td>{{ item.after_automation or "-" }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="6">No shared case changed status or automation.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% else %}
+  <section class="panel">
+    <p class="empty-state">Select two runs to compare confidence, coverage, and visual signature changes.</p>
+  </section>
+{% endif %}
+{% endblock %}
