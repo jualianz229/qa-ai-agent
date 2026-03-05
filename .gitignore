@@ -37,7 +37,6 @@ modules/*/evidence/
 
 # Maintenance & Testing
 test_ai/
-tests/
 err.txt
 pytest_out.txt
 
