@@ -47,8 +47,9 @@ endblock %}
       <p class="helper-text" id="vrt-job-status" role="status" aria-live="polite"></p>
     </div>
     <div class="artifact-groups vrt-next-actions" id="vrt-next-actions">
-      <a class="artifact-link" href="{{ url_for('vrt_changes_page') }}">Open Visual Changes</a>
-      <a class="artifact-link" href="{{ url_for('vrt_monitor_page') }}">Open Diff Monitor</a>
+      <a class="artifact-link" href="{{ url_for('visual_regression_testing.vrt_changes_page') }}">Open Visual
+        Changes</a>
+      <a class="artifact-link" href="{{ url_for('visual_regression_testing.vrt_monitor_page') }}">Open Diff Monitor</a>
     </div>
   </form>
 </section>
@@ -228,8 +229,8 @@ endblock %}
         if (nextActions && payload?.job?.run_name) {
           const runName = encodeURIComponent(payload.job.run_name);
           nextActions.innerHTML = `
-            <a class="artifact-link" href="{{ url_for('vrt_changes_page') }}">Open VRT Changes</a>
-            <a class="artifact-link" href="{{ url_for('vrt_monitor_page') }}?run_name=${runName}">Open Diff Monitor for this run</a>
+            <a class="artifact-link" href="{{ url_for('visual_regression_testing.vrt_changes_page') }}">Open VRT Changes</a>
+            <a class="artifact-link" href="{{ url_for('visual_regression_testing.vrt_monitor_page') }}?run_name=${runName}">Open Diff Monitor for this run</a>
           `;
         }
       } catch (error) {
@@ -250,5 +251,4 @@ endblock %}
     });
   });
 </script>
-{% endblock %}
 {% endblock %}

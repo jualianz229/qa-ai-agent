@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}All Runs | TracePilot{% endblock %}
+{% block header_kicker %}Execution Analysis{% endblock %}
+{% block header_title %}All Execution Runs{% endblock %}
+{% block header_subtitle %}Overview of all scenario and automation runs recorded.{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="eyebrow">Execution history</p>
+            <h1>Runs</h1>
+        </div>
+        <div class="metric-inline">
+            <span>{{ metrics.runs }} total runs recorded</span>
+        </div>
+    </div>
+
+    <form class="filter-toolbar" action="{{ url_for('test_case_generator.runs_page') }}" method="get">
+        <label class="filter-field">
+            <span>Sort runs</span>
+            <select name="sort" onchange="this.form.submit()">
+                <option value="latest" {% if (sort_mode or 'latest' )=='latest' %}selected{% endif %}>Latest</option>
+                <option value="safety_risk" {% if sort_mode=='safety_risk' %}selected{% endif %}>Safety risk first
+                </option>
+                <option value="failed_high" {% if sort_mode=='failed_high' %}selected{% endif %}>Most failed first
+                </option>
+            </select>
+        </label>
+    </form>
+
+    <div class="table-shell">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Run</th>
+                    <th>Type</th>
+                    <th>Cases</th>
+                    <th>Passed</th>
+                    <th>Failed</th>
+                    <th>Safety Index</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in runs %}
+                <tr>
+                    <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.run_name) }}">{{
+                            run.run_name[:25] }}...</a></td>
+                    <td><span class="panel-badge">{{ run.page_type|upper }}</span></td>
+                    <td>{{ run.total_cases }}</td>
+                    <td>{{ run.status_counts.passed or 0 }}</td>
+                    <td><span class="{% if run.status_counts.failed > 0 %}danger{% endif %}">{{ run.status_counts.failed
+                            or 0 }}</span></td>
+                    <td>
+                        <span
+                            class="badge {% if run.safety_index < 70 %}badge-failed{% elif run.safety_index < 90 %}badge-skipped{% else %}badge-passed{% endif %}">
+                            {{ run.safety_index }}%
+                        </span>
+                    </td>
+                    <td>
+                        <a class="inline-mini-button"
+                            href="{{ url_for('run_detail', run_name=run.run_name) }}">Details</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7">No runs found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

@@ -358,7 +358,31 @@ def build_knowledge_snapshot(url: str = "", profiles_dir: str | Path | None = No
     from core.config import PROFILES_DIR
     if profiles_dir is None:
         profiles_dir = PROFILES_DIR
-    return load_knowledge_bank_snapshot(url, profiles_dir=profiles_dir)
+    
+    snapshot = load_knowledge_bank_snapshot(url, profiles_dir=profiles_dir)
+    
+    # Count profiles by looking at the learned directory
+    profiles_dir = Path(profiles_dir) / "learned"
+    profile_count = sum(1 for p in profiles_dir.glob("*.json") if not p.name.startswith("_"))
+    
+    # Calculate totals from global profile
+    global_metrics = snapshot.get("global", {})
+    total_patterns = (
+        global_metrics.get("field_selector_count", 0) + 
+        global_metrics.get("action_selector_count", 0) + 
+        global_metrics.get("semantic_pattern_count", 0)
+    )
+    
+    # Extract clusters from subdirectories if they exist
+    clusters_dir = profiles_dir / "clusters"
+    clusters = [p.stem for p in clusters_dir.glob("*.json")] if clusters_dir.exists() else []
+
+    return {
+        **snapshot,
+        "total_profiles": profile_count,
+        "total_patterns": total_patterns,
+        "top_clusters": sorted(clusters)[:20] or ["General", "Auth", "Search", "Form"]
+    }
 
 
 def build_run_comparison(left_run: str | Path, right_run: str | Path, results_dir: str | Path = "Result") -> dict:

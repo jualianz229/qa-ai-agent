@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Compare Runs | TracePilot{% endblock %}
+{% block header_kicker %}Execution Analysis{% endblock %}
+{% block header_title %}Run Comparison{% endblock %}
+{% block header_subtitle %}Analysis of differences between two execution runs.{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="eyebrow">Comparison mode</p>
+            <h1>Select Runs to Compare</h1>
+        </div>
+    </div>
+
+    <form class="filter-toolbar" action="{{ url_for('compare_runs') }}" method="get">
+        <div class="form-grid" style="grid-template-columns: 1fr 1fr auto; align-items: end;">
+            <label class="filter-field">
+                <span>Baseline (Left)</span>
+                <select name="left" required>
+                    <option value="">Select baseline</option>
+                    {% for run in runs %}
+                    <option value="{{ run.run_name }}" {% if left==run.run_name %}selected{% endif %}>{{
+                        run.run_name[:30] }}...</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Target (Right)</span>
+                <select name="right" required>
+                    <option value="">Select target</option>
+                    {% for run in runs %}
+                    <option value="{{ run.run_name }}" {% if right==run.run_name %}selected{% endif %}>{{
+                        run.run_name[:30] }}...</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button class="primary-button" type="submit">Compare</button>
+        </div>
+    </form>
+
+    {% if comparison %}
+    <div class="stats-grid" style="margin-top: 2rem;">
+        <div class="stat-card">
+            <div class="stat-label">Shared Cases</div>
+            <div class="stat-value">{{ comparison.shared_cases|length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Status Changes</div>
+            <div class="stat-value warning">{{ comparison.status_diffs|length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">New in Left</div>
+            <div class="stat-value highlight">{{ comparison.only_left|length }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">New in Right</div>
+            <div class="stat-value highlight">{{ comparison.only_right|length }}</div>
+        </div>
+    </div>
+
+    <div class="dashboard-grid">
+        <section class="dashboard-section card glass" style="grid-column: span 2;">
+            <div class="section-header">
+                <h3><i data-lucide="diff"></i> Status Comparisons</h3>
+            </div>
+            <div class="table-shell">
+                <table class="table-minimal">
+                    <thead>
+                        <tr>
+                            <th>Case ID / Title</th>
+                            <th>Baseline Status</th>
+                            <th>Target Status</th>
+                            <th>Delta</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in comparison.status_diffs %}
+                        <tr>
+                            <td><strong>{{ item.id }}</strong><br><small>{{ item.title[:50] }}...</small></td>
+                            <td><span class="badge badge-{{ item.left_status }}">{{ item.left_status|upper }}</span>
+                            </td>
+                            <td><span class="badge badge-{{ item.right_status }}">{{ item.right_status|upper }}</span>
+                            </td>
+                            <td>
+                                {% if item.left_status == 'passed' and item.right_status == 'failed' %}
+                                <span class="badge badge-failed">REGRESSION</span>
+                                {% elif item.left_status == 'failed' and item.right_status == 'passed' %}
+                                <span class="badge badge-success">FIXED</span>
+                                {% else %}
+                                <span class="badge">CHANGED</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+    {% else %}
+    <div class="empty-state" style="padding: 4rem; text-align: center;">
+        <i data-lucide="comparison" style="width: 48px; height: 48px; opacity: 0.2;"></i>
+        <p>Select two runs above to see detailed differences in test results and history tracking.</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}
