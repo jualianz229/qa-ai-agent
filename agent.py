@@ -25,24 +25,39 @@ from rich.panel import Panel
 from rich.rule import Rule
 
 from core.ai_engine import AIEngine
-from core.artifacts import confidence_analysis_path, execution_debug_path, execution_learning_path, execution_results_path, flaky_analysis_path, json_artifact_path, token_usage_path
+from core.common.artifacts import (
+    confidence_analysis_path,
+    execution_debug_path,
+    execution_learning_path,
+    execution_results_path,
+    flaky_analysis_path,
+    json_artifact_path,
+    scenario_contract_validation_path,
+    token_usage_path,
+)
 from core.case_memory import merge_case_memory
 from core.confidence import build_historical_confidence_signal, compute_composite_confidence
 from core.contradictions import analyze_cross_stage_contradictions
+from core.drift_detector import detect_run_drift
 from core.executor import CodeGenerator
 from core.flaky_bank import merge_flaky_history
 from core.guardrails import validate_execution_plan
 from core.planner import build_execution_plan, build_normalized_page_model, save_json_artifact
+from core.policy_pack import run_anti_hallucination_policy_pack
+from core.replay_verifier import verify_plan_execution_consistency
 from core.result_analyzer import analyze_execution_results, save_execution_summary
 from core.run_context import merge_recrawl_project_info
 from core.scanner import Scanner
-from core.site_profiles import enrich_site_profile_with_clusters, load_site_profile, merge_execution_learning
-from core.artifacts import contradiction_analysis_path
+from core.scenario_contract import validate_scenario_contract
+from core.safety_gates import build_execution_gate_decision
+from core.self_critique import refine_execution_plan_with_self_critique
+from core.common.site_profiles import enrich_site_profile_with_clusters, load_site_profile, merge_execution_learning
+from core.common.artifacts import contradiction_analysis_path
+from core.common.artifacts import anti_hallucination_audit_path, drift_analysis_path, execution_replay_verification_path, policy_pack_report_path
 
 load_dotenv()
 
 console = Console(force_terminal=True)
-ai: AIEngine | None = None
 runner = Scanner()
 
 Path("instructions").mkdir(exist_ok=True)
@@ -57,6 +72,67 @@ if not sample_auth_file.exists():
     )
 
 
+def _minimal_fallback_case(url: str) -> dict:
+    return {
+        "ID": "GEN-001",
+        "Module": "General",
+        "Category": "Functional",
+        "Test Type": "Positive",
+        "Risk Rating": "Medium",
+        "Anchored Selector": "",
+        "Title": "Validate primary page loads and key content is visible",
+        "Precondition": "",
+        "Steps to Reproduce": f"1. Open the site {url}\n2. Observe the main heading and primary controls.",
+        "Expected Result": "The page loads successfully and key user-facing elements are visible without errors.",
+        "Actual Result": "",
+        "Severity": "Medium",
+        "Priority": "P2",
+        "Evidence": "",
+        "Automation": "auto",
+    }
+
+
+def _build_fallback_scenarios(
+    engine: AIEngine,
+    url: str,
+    page_info: dict,
+    page_model: dict,
+    page_scope: dict,
+    instruction: str,
+) -> list[dict]:
+    try:
+        scenario_volume = engine._derive_scenario_volume(page_model, page_scope, {}, instruction)  # noqa: SLF001
+        target_count = max(12, min(80, int(scenario_volume.get("target_count", 24) or 24)))
+        cases = engine._heuristic_scenarios_from_facts(  # noqa: SLF001
+            url=url,
+            page_info=page_info,
+            page_model=page_model,
+            page_scope=page_scope,
+            custom_instruction=instruction,
+            target_count=target_count,
+        )
+        if cases:
+            return cases
+    except Exception:
+        pass
+    return [_minimal_fallback_case(url)]
+
+
+def _coerce_non_empty_scenarios(
+    cases: list[dict] | None,
+    engine: AIEngine,
+    url: str,
+    page_info: dict,
+    page_model: dict,
+    page_scope: dict,
+    instruction: str,
+) -> list[dict]:
+    normalized = [item for item in (cases or []) if isinstance(item, dict)]
+    if normalized:
+        return normalized
+    return _build_fallback_scenarios(engine, url, page_info, page_model, page_scope, instruction)
+
+
 def process_single_url(
     url: str,
     instruction: str,
@@ -66,8 +142,9 @@ def process_single_url(
     adaptive_recrawl: bool,
     execute_now: bool | None = None,
     executor_headless: bool = True,
+    run_name: str | None = None,
 ):
-    engine = get_ai()
+    engine = AIEngine()
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     site_profile = load_site_profile(url)
@@ -78,10 +155,16 @@ def process_single_url(
 
     console.print(Rule(f"[bold]Scan Halaman: {url}[/bold]"))
     with console.status(
-        f"[bold yellow]Menjalankan browser headless, memindai halaman, dan membaca beberapa internal link relevan dari {url}...[/bold yellow]",
+        f"[bold yellow]Running a headless browser, scanning the page, and reading relevant internal links from {url}...[/bold yellow]",
         spinner="dots",
     ):
-        project_info, page_info, _ = runner.scan_website(url, use_auth, crawl_limit=crawl_limit, site_profile=site_profile)
+        project_info, page_info, _ = runner.scan_website(
+            url,
+            use_auth,
+            crawl_limit=crawl_limit,
+            site_profile=site_profile,
+            run_name=run_name,
+        )
 
     try:
         page_scope = analyze_page_scope_with_retry(
@@ -92,6 +175,7 @@ def process_single_url(
             use_auth=use_auth,
             crawl_limit=crawl_limit,
             adaptive_recrawl=adaptive_recrawl,
+            engine=engine,
         )
         page_model = build_normalized_page_model(page_info)
         site_profile = enrich_site_profile_with_clusters(site_profile, page_model=page_model, page_scope=page_scope)
@@ -118,6 +202,10 @@ def process_single_url(
                     "allowed_vocabulary": engine.last_scope_validation.get("allowed_vocabulary", {}),
                     "task_contract": engine.last_scope_validation.get("task_contract", {}),
                     "unsupported_surface_report": engine.last_scope_validation.get("unsupported_surface_report", {}),
+                    "routing": engine.last_scope_validation.get("routing", {}),
+                    "fact_pack_summary": engine.last_scope_validation.get("fact_pack_summary", {}),
+                    "historical_signal": engine.last_scope_validation.get("historical_signal", {}),
+                    "composite_confidence": engine.last_scope_validation.get("composite_confidence", {}),
                 },
                 json_artifact_path(
                     project_info["run_dir"],
@@ -141,9 +229,12 @@ def process_single_url(
         scope_json_path = runner.save_page_scope(page_scope, project_info)
         crawled_json_path = runner.save_crawled_pages(page_info, project_info)
         raw_scan_json_path = runner.save_raw_scan(page_info, project_info)
+        visual_baseline_json_path, visual_diff_json_path = runner.save_visual_regression_artifacts(page_info, project_info)
         console.print(f"  [green][OK][/green] Scope analysis disimpan: [dim]{scope_json_path}[/dim]")
         console.print(f"  [green][OK][/green] Daftar linked pages disimpan: [dim]{crawled_json_path}[/dim]")
         console.print(f"  [green][OK][/green] Raw scan disimpan: [dim]{raw_scan_json_path}[/dim]")
+        console.print(f"  [green][OK][/green] Baseline (Visual) disimpan: [dim]{visual_baseline_json_path}[/dim]")
+        console.print(f"  [green][OK][/green] Visual Diff disimpan: [dim]{visual_diff_json_path}[/dim]")
         console.print(f"  [green][OK][/green] Normalized page model disimpan: [dim]{page_model_path}[/dim]")
         console.print(f"  [green][OK][/green] Site profile disimpan: [dim]{site_profile_path}[/dim]")
         if scope_validation_path:
@@ -162,17 +253,77 @@ def process_single_url(
                 custom_instruction=instruction,
                 csv_sep=csv_sep,
             )
+            parsed_data = _coerce_non_empty_scenarios(
+                parsed_data,
+                engine,
+                url,
+                page_info,
+                page_model,
+                page_scope,
+                instruction,
+            )
+            scenario_contract = validate_scenario_contract(
+                cases=parsed_data,
+                page_scope=page_scope,
+                page_model=page_model,
+                page_info=page_info,
+            )
+            scenario_contract_path = save_json_artifact(
+                scenario_contract,
+                scenario_contract_validation_path(project_info["run_dir"]),
+            )
+            if not scenario_contract.get("is_valid", False):
+                salvage_cases = list(scenario_contract.get("valid_cases", []) or [])
+                if salvage_cases:
+                    parsed_data = salvage_cases
+                    console.print(
+                        "  [yellow][i][/yellow] Scenario contract found blocking issues; "
+                        "continuing with validated cases only."
+                    )
+                else:
+                    parsed_data = _build_fallback_scenarios(
+                        engine,
+                        url,
+                        page_info,
+                        page_model,
+                        page_scope,
+                        instruction,
+                    )
+                    console.print(
+                        "  [yellow][i][/yellow] Scenario contract blocked all AI cases; "
+                        "using grounded fallback scenarios to keep output non-empty."
+                    )
+                scenario_contract = validate_scenario_contract(
+                    cases=parsed_data,
+                    page_scope=page_scope,
+                    page_model=page_model,
+                    page_info=page_info,
+                )
+                scenario_contract_path = save_json_artifact(
+                    scenario_contract,
+                    scenario_contract_validation_path(project_info["run_dir"]),
+                )
             saved_csv_path = runner.save_csv_scenarios(parsed_data, project_info, csv_sep)
             console.print(f"  [green][OK][/green] CSV berhasil dibuat: [dim]{saved_csv_path}[/dim]")
+            console.print(f"  [green][OK][/green] Scenario contract validation disimpan: [dim]{scenario_contract_path}[/dim]")
             if engine.last_scenario_validation:
                 scenario_validation_path = save_json_artifact(
                 {
                     "issues": engine.last_scenario_validation.get("issues", []),
+                    "valid_cases": engine.last_scenario_validation.get("valid_cases", []),
                     "rejected_cases": engine.last_scenario_validation.get("rejected_cases", []),
                     "allowed_vocabulary": engine.last_scenario_validation.get("allowed_vocabulary", {}),
                     "task_contract": engine.last_scenario_validation.get("task_contract", {}),
                     "grounding_summary": engine.last_scenario_validation.get("grounding_summary", {}),
                     "unsupported_surface_report": engine.last_scenario_validation.get("unsupported_surface_report", {}),
+                    "quality_flags": engine.last_scenario_validation.get("quality_flags", {}),
+                    "routing": engine.last_scenario_validation.get("routing", {}),
+                    "fact_pack_summary": engine.last_scenario_validation.get("fact_pack_summary", {}),
+                    "historical_signal": engine.last_scenario_validation.get("historical_signal", {}),
+                    "feedback_learning_signal": engine.last_scenario_validation.get("feedback_learning_signal", {}),
+                    "self_critique": engine.last_scenario_validation.get("self_critique", {}),
+                    "ai_quality": engine.last_scenario_validation.get("ai_quality", {}),
+                    "composite_confidence": engine.last_scenario_validation.get("composite_confidence", {}),
                 },
                 json_artifact_path(
                     project_info["run_dir"],
@@ -205,9 +356,24 @@ def process_single_url(
                 ),
             )
             execution_plan = execution_plan_validation["valid_plan"]
+            execution_plan, self_critique_report = refine_execution_plan_with_self_critique(execution_plan, page_model)
+            execution_plan_validation = validate_execution_plan(execution_plan, page_model, page_info)
+            validation_path = save_json_artifact(
+                {
+                    "issues": execution_plan_validation["issues"],
+                    "rejected_plans": execution_plan_validation["rejected_plans"],
+                    "valid_plan_count": len(execution_plan_validation["valid_plan"].get("plans", [])),
+                    "self_critique": self_critique_report,
+                },
+                json_artifact_path(
+                    project_info["run_dir"],
+                    f"Execution_Plan_Validation_{project_info['safe_name']}_{project_info['timestamp']}.json",
+                ),
+            )
             if not execution_plan.get("plans"):
-                raise ValueError(
-                    "Semua execution plan ditolak guardrail. Periksa JSON/Execution_Plan_Validation_*.json untuk detail."
+                console.print(
+                    "  [yellow][i][/yellow] All execution plans were rejected by guardrails. "
+                    "CSV remains available, automation step is skipped for this run."
                 )
             confidence_scope = dict(page_scope)
             if "ai_confidence" in confidence_scope:
@@ -266,11 +432,75 @@ def process_single_url(
                 contradiction_report,
                 contradiction_analysis_path(project_info["run_dir"]),
             )
+            anti_hallucination_audit = {
+                "url": url,
+                "run_name": Path(project_info["run_dir"]).name,
+                "page_type": page_scope.get("page_type", ""),
+                "routing": {
+                    "scope": engine.last_scope_validation.get("routing", {}),
+                    "scenario": engine.last_scenario_validation.get("routing", {}),
+                },
+                "fact_pack_summary": {
+                    "scope": engine.last_scope_validation.get("fact_pack_summary", {}),
+                    "scenario": engine.last_scenario_validation.get("fact_pack_summary", {}),
+                },
+                "guardrails": {
+                    "scope_issue_count": len(engine.last_scope_validation.get("issues", [])),
+                    "scenario_rejection_count": len(engine.last_scenario_validation.get("rejected_cases", [])),
+                    "plan_rejection_count": len(execution_plan_validation.get("rejected_plans", [])),
+                    "contradiction_count": contradiction_report.get("summary", {}).get("contradiction_count", 0),
+                },
+                "unsupported_surface_report": {
+                    "scope": engine.last_scope_validation.get("unsupported_surface_report", {}),
+                    "scenario": engine.last_scenario_validation.get("unsupported_surface_report", {}),
+                },
+                "confidence": {
+                    "score": composite_confidence.get("score", 0),
+                    "class": composite_confidence.get("confidence_class", ""),
+                    "anti_hallucination": composite_confidence.get("breakdown", {}).get("anti_hallucination", 0.0),
+                    "source_trust": composite_confidence.get("breakdown", {}).get("source_trust", 0.0),
+                    "negative_evidence": composite_confidence.get("breakdown", {}).get("negative_evidence", 0.0),
+                },
+                "top_scenario_rejection_reasons": [
+                    issue
+                    for item in engine.last_scenario_validation.get("rejected_cases", [])[:8]
+                    for issue in item.get("issues", [])[:2]
+                ][:12],
+                "top_contradictions": [
+                    item.get("message", "")
+                    for item in contradiction_report.get("issues", [])[:10]
+                    if str(item.get("message", "")).strip()
+                ],
+                "self_critique": self_critique_report,
+            }
+            execution_gate = build_execution_gate_decision(
+                composite_confidence=composite_confidence,
+                scenario_validation=engine.last_scenario_validation,
+                execution_plan_validation=execution_plan_validation,
+                contradiction_report=contradiction_report,
+            )
+            policy_pack_report = run_anti_hallucination_policy_pack()
+            anti_hallucination_audit["execution_gate"] = execution_gate
+            anti_hallucination_audit["policy_pack"] = policy_pack_report
+            anti_hallucination_audit_path_saved = save_json_artifact(
+                anti_hallucination_audit,
+                anti_hallucination_audit_path(project_info["run_dir"]),
+            )
+            policy_pack_path_saved = save_json_artifact(
+                policy_pack_report,
+                policy_pack_report_path(project_info["run_dir"]),
+            )
             console.print(f"  [green][OK][/green] Execution plan dibuat: [dim]{execution_plan_path}[/dim]")
             console.print(f"  [green][OK][/green] Validation plan disimpan: [dim]{validation_path}[/dim]")
             console.print(f"  [green][OK][/green] Confidence analysis disimpan: [dim]{confidence_path}[/dim]")
             console.print(
                 f"  [green][OK][/green] Contradiction analysis disimpan: [dim]{contradiction_path}[/dim]"
+            )
+            console.print(
+                f"  [green][OK][/green] Anti-hallucination audit disimpan: [dim]{anti_hallucination_audit_path_saved}[/dim]"
+            )
+            console.print(
+                f"  [green][OK][/green] Policy pack report disimpan: [dim]{policy_pack_path_saved}[/dim]"
             )
             if contradiction_report.get("summary", {}).get("contradiction_count", 0):
                 console.print(
@@ -284,10 +514,10 @@ def process_single_url(
                     + "[/dim]"
                 )
 
-            console.print("  [dim][>] Menyusun ringkasan eksekutif...[/dim]")
+            console.print("  [dim][>] Building executive summary...[/dim]")
             md_summary = engine.generate_executive_summary(url, project_info["title"], page_info, parsed_data)
             saved_md_path = runner.save_executive_summary(md_summary, project_info)
-            console.print(f"  [green][OK][/green] Ringkasan eksekutif dibuat: [dim]{saved_md_path}[/dim]")
+            console.print(f"  [green][OK][/green] Executive summary created: [dim]{saved_md_path}[/dim]")
             usage_path = save_json_artifact(engine.usage_snapshot(), token_usage_path(project_info["run_dir"]))
             console.print(f"  [green][OK][/green] Token usage disimpan: [dim]{usage_path}[/dim]")
 
@@ -298,22 +528,35 @@ def process_single_url(
             console.print(f"\n[cyan]  [!] Script executor berhasil dibuat di:[/cyan] [bold]{pom_script}[/bold]")
             if execute_now is None:
                 console.print(
-                    "\n[bold yellow]Apakah anda ingin menjalankan executor sekarang untuk mengumpulkan video evidence?[/bold yellow]"
+                    "\n[bold yellow]Do you want to run the executor now to collect video evidence?[/bold yellow]"
                 )
-                console.print("  [1] Ya, jalankan sekarang")
-                console.print("  [2] Tidak, simpan script saja")
-                execute_choice = console.input("  [cyan]Pilih [1/2] (Default: 2): [/cyan]").strip()
+                console.print("  [1] Yes, run now")
+                console.print("  [2] No, save script only")
+                execute_choice = console.input("  [cyan]Select [1/2] (Default: 2): [/cyan]").strip()
                 should_execute = execute_choice == "1"
             else:
                 should_execute = execute_now
 
             if should_execute:
-                console.print("[bold green][>] Menjalankan script executor...[/bold green]")
+                if execution_gate.get("blocked"):
+                    console.print(
+                        "[bold yellow][BLOCKED][/bold yellow] Execution blocked by anti-hallucination guard: "
+                        + "; ".join(execution_gate.get("reasons", [])[:3])
+                    )
+                    console.print(
+                        f"[dim]Set env {execution_gate.get('override_env', 'QA_AI_ALLOW_LOW_ANTI_HALLU')}=1 for manual override.[/dim]"
+                    )
+                    should_execute = False
+                elif execution_gate.get("override_applied"):
+                    console.print("[yellow][i][/yellow] Guard anti-hallucination dioverride via environment variable.")
+
+            if should_execute:
+                console.print("[bold green][>] Running executor script...[/bold green]")
                 import subprocess
 
                 try:
                     subprocess.run([sys.executable, pom_script.name], cwd=pom_script.parent, check=True)
-                    console.print("\n[bold green][OK] Eksekusi otomatisasi selesai.[/bold green]")
+                    console.print("\n[bold green][OK] Automation execution completed.[/bold green]")
                     results_path = execution_results_path(project_info["run_dir"])
                     if results_path.exists():
                         results_payload = json.loads(results_path.read_text(encoding="utf-8"))
@@ -373,12 +616,43 @@ def process_single_url(
                             contradiction_report,
                             contradiction_analysis_path(project_info["run_dir"]),
                         )
+                        replay_report = verify_plan_execution_consistency(
+                            execution_plan=execution_plan,
+                            execution_results=results_payload,
+                            execution_debug=_load_json_if_exists(execution_debug_path(project_info["run_dir"])),
+                        )
+                        replay_report_path = save_json_artifact(
+                            replay_report,
+                            execution_replay_verification_path(project_info["run_dir"]),
+                        )
+                        drift_report = detect_run_drift(
+                            run_dir=project_info["run_dir"],
+                            url=url,
+                            visual_signature=_build_visual_signature_from_context(page_info, page_scope, page_model),
+                            network_summary=_network_summary_from_results(results_payload),
+                        )
+                        drift_report_path = save_json_artifact(
+                            drift_report,
+                            drift_analysis_path(project_info["run_dir"]),
+                        )
                         debug_path = execution_debug_path(project_info["run_dir"])
                         learning_path = execution_learning_path(project_info["run_dir"])
-                        console.print(f"[green][OK][/green] Ringkasan eksekusi dibuat: [dim]{summary_path}[/dim]")
-                        console.print(f"[green][OK][/green] CSV diperbarui dengan hasil eksekusi: [dim]{saved_csv_path}[/dim]")
+                        console.print(f"[green][OK][/green] Execution summary created: [dim]{summary_path}[/dim]")
+                        console.print(f"[green][OK][/green] CSV updated with execution results: [dim]{saved_csv_path}[/dim]")
+                        console.print(f"[green][OK][/green] Replay verification disimpan: [dim]{replay_report_path}[/dim]")
+                        console.print(f"[green][OK][/green] Drift analysis disimpan: [dim]{drift_report_path}[/dim]")
+                        if replay_report.get("summary", {}).get("issue_count", 0):
+                            console.print(
+                                "  [yellow][i][/yellow] Replay consistency issue: "
+                                f"{replay_report['summary'].get('issue_count', 0)}"
+                            )
+                        if drift_report.get("issues"):
+                            console.print(
+                                "  [yellow][i][/yellow] Drift warning: "
+                                f"{len(drift_report.get('issues', []))} signal"
+                            )
                         if debug_path.exists():
-                            console.print(f"[green][OK][/green] Debug eksekusi disimpan: [dim]{debug_path}[/dim]")
+                            console.print(f"[green][OK][/green] Execution debug saved: [dim]{debug_path}[/dim]")
                         if learning_path.exists():
                             learned_profile_info = merge_execution_learning(
                                 url,
@@ -400,14 +674,14 @@ def process_single_url(
                                         f"[dim]{', '.join(learned_profile_info['cluster_paths'][:3])}[/dim]"
                                     )
                 except subprocess.CalledProcessError as exc:
-                    console.print(f"\n[bold red][ERR] Executor gagal dijalankan: {exc}[/bold red]")
+                    console.print(f"\n[bold red][ERR] Executor failed to run: {exc}[/bold red]")
             else:
-                console.print("[dim]  Eksekusi dilewati. Script bisa dijalankan manual nanti.[/dim]")
+                console.print("[dim]  Execution skipped. The script can be run manually later.[/dim]")
 
     except Exception as exc:
         import traceback
 
-        console.print(f"\n[bold red][ERR] Error pada proses AI/generasi untuk {url}:[/bold red] {exc}")
+        console.print(f"\n[bold red][ERR] Error during AI/generation process for {url}:[/bold red] {exc}")
         console.print(f"[red]{traceback.format_exc()}[/red]")
 
 
@@ -419,8 +693,8 @@ def analyze_page_scope_with_retry(
     use_auth: bool,
     crawl_limit: int,
     adaptive_recrawl: bool,
+    engine: AIEngine,
 ) -> dict:
-    engine = get_ai()
     console.print(Rule(f"[bold]AI Analisa Scope Halaman: {url}[/bold]"))
     with console.status(
         f"[bold green]AI ({engine.current_model}) sedang membaca konteks halaman dan menentukan scope testing...[/bold green]"
@@ -447,10 +721,10 @@ def analyze_page_scope_with_retry(
 
     expanded_limit = min(max(crawl_limit + 2, 3), 5)
     console.print(
-        f"  [yellow][i][/yellow] Confidence rendah ({current_confidence}). Mencoba scan ulang dengan linked page lebih banyak ({expanded_limit})."
+        f"  [yellow][i][/yellow] Low confidence ({current_confidence}). Retrying scan with more linked pages ({expanded_limit})."
     )
     with console.status(
-        f"[bold yellow]Menjalankan adaptive recrawl untuk memperkaya konteks halaman...[/bold yellow]",
+        f"[bold yellow]Running adaptive recrawl to enrich page context...[/bold yellow]",
         spinner="dots",
     ):
         refreshed_project_info, refreshed_page_info, _ = runner.scan_website(
@@ -458,6 +732,7 @@ def analyze_page_scope_with_retry(
             use_auth,
             crawl_limit=expanded_limit,
             site_profile=project_info.get("site_profile"),
+            run_name=Path(project_info.get("run_dir", "")).name or None,
         )
 
     merge_recrawl_project_info(project_info, refreshed_project_info)
@@ -484,10 +759,53 @@ def analyze_page_scope_with_retry(
     return page_scope
 
 
+def _load_json_if_exists(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _build_visual_signature_from_context(page_info: dict, page_scope: dict, page_model: dict) -> dict:
+    headings = [item.get("text", "") for item in page_info.get("headings", []) if isinstance(item, dict)]
+    component_types = [item.get("type", "") for item in page_model.get("component_catalog", []) if item.get("type")]
+    return {
+        "page_type": page_scope.get("page_type", ""),
+        "heading_count": len(headings),
+        "button_count": len(page_info.get("buttons", [])),
+        "link_count": len(page_info.get("links", [])),
+        "section_count": len(page_info.get("sections", [])),
+        "component_count": len(page_model.get("component_catalog", [])),
+        "component_types": sorted(dict.fromkeys(component_types)),
+    }
+
+
+def _network_summary_from_results(results_payload: dict) -> dict:
+    endpoints: set[str] = set()
+    requests = 0
+    failing = 0
+    for item in results_payload.get("results", []):
+        summary = item.get("network_summary", {}) if isinstance(item.get("network_summary", {}), dict) else {}
+        requests += int(summary.get("request_count", 0) or 0)
+        failing += int(summary.get("failing_response_count", 0) or 0)
+        for endpoint in summary.get("top_endpoints", [])[:8]:
+            path = str(endpoint.get("path", "")).strip()
+            if path:
+                endpoints.add(path)
+    return {
+        "request_count": requests,
+        "failing_response_count": failing,
+        "top_endpoints": sorted(endpoints)[:10],
+    }
+
+
 def parse_args():
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--url")
     parser.add_argument("--batch-file")
+    parser.add_argument("--run-name")
     parser.add_argument("--instruction", default="")
     parser.add_argument("--instruction-file")
     parser.add_argument("--csv-sep", choices=[",", ";"], default=",")
@@ -508,21 +826,13 @@ def _load_instruction(instruction: str, instruction_file: str | None) -> str:
         return file_instruction
     return manual_instruction
 
-
-def get_ai() -> AIEngine:
-    global ai
-    if ai is None:
-        ai = AIEngine()
-    return ai
-
-
 def main():
     args = parse_args()
-    engine = get_ai()
+    preview_engine = AIEngine()
     console.print(
         Panel(
             f"[bold cyan]QA Agent - Page Scope Analyzer & Test Scenario Generator[/bold cyan]\n"
-            f"[dim]Model aktif: {engine.current_model} ({engine.current_rpm} RPM)[/dim]",
+            f"[dim]Active model: {preview_engine.current_model} ({preview_engine.current_rpm} RPM)[/dim]",
             border_style="cyan",
             box=box.DOUBLE_EDGE,
         )
@@ -530,11 +840,11 @@ def main():
 
     if args.url or args.batch_file:
         if args.url and args.batch_file:
-            raise ValueError("Gunakan salah satu: --url atau --batch-file, jangan keduanya sekaligus.")
+            raise ValueError("Use only one option: --url or --batch-file, not both at once.")
         if args.batch_file:
             batch_path = Path(args.batch_file)
             if not batch_path.exists():
-                raise FileNotFoundError(f"Batch file tidak ditemukan: {batch_path}")
+                raise FileNotFoundError(f"Batch file not found: {batch_path}")
             urls_to_process = [
                 line.strip()
                 for line in batch_path.read_text(encoding="utf-8").splitlines()
@@ -542,6 +852,8 @@ def main():
             ]
         else:
             urls_to_process = [args.url]
+        if args.run_name and len(urls_to_process) != 1:
+            raise ValueError("--run-name is only supported for a single URL per execution.")
         instruction = _load_instruction(args.instruction, args.instruction_file)
         csv_sep = ";" if args.csv_sep == ";" else ","
         use_auth = args.use_auth
@@ -550,12 +862,12 @@ def main():
         execute_now = args.run_executor
         executor_headless = not args.executor_headed
         console.print(
-            f"[dim]Mode non-interaktif aktif untuk "
+            f"[dim]Non-interactive mode enabled for "
             f"{args.url or args.batch_file}[/dim]"
         )
     else:
         console.print("\n[bold]Step 1: Input URL / File Batch (.txt)[/bold]")
-        url_input = console.input("  [cyan]Masukan URL target atau file .txt batch: [/cyan]").strip()
+        url_input = console.input("  [cyan]Enter target URL or .txt batch file: [/cyan]").strip()
 
         if url_input.lower() in ["", "exit", "quit", "keluar"]:
             console.print("[dim]Sampai jumpa![/dim]")
@@ -565,31 +877,31 @@ def main():
         if url_input.endswith(".txt") and os.path.exists(url_input):
             with open(url_input, "r", encoding="utf-8") as handle:
                 urls_to_process = [line.strip() for line in handle if line.strip()]
-            console.print(f"[bold green]Batch mode aktif: ditemukan {len(urls_to_process)} URL.[/bold green]")
+            console.print(f"[bold green]Batch mode enabled: found {len(urls_to_process)} URLs.[/bold green]")
         else:
             urls_to_process.append(url_input)
 
         console.print("\n[bold]Step 2: Format CSV[/bold]")
         console.print("  [1] Koma (,) - standar umum")
-        console.print("  [2] Titik koma (;) - cocok untuk Excel regional tertentu")
-        sep_choice = console.input("  [cyan]Pilih [1/2] (Default: 1): [/cyan]").strip()
+        console.print("  [2] Semicolon (;) - suitable for certain regional Excel formats")
+        sep_choice = console.input("  [cyan]Select [1/2] (Default: 1): [/cyan]").strip()
         csv_sep = ";" if sep_choice == "2" else ","
 
         console.print("\n[bold]Step 3: Session Mode (Optional)[/bold]")
         console.print("  [1] Standard scan tanpa session")
         console.print("  [2] Gunakan session auth Playwright")
-        auth_choice = console.input("  [cyan]Pilih [1/2] (Default: 1): [/cyan]").strip()
+        auth_choice = console.input("  [cyan]Select [1/2] (Default: 1): [/cyan]").strip()
         use_auth = auth_choice == "2"
 
         if use_auth:
             console.print("\n[bold yellow][i] Cara memakai session auth Playwright:[/bold yellow]")
             console.print("  1. Simpan file session bernama [bold green]auth_state.json[/bold green] di folder [bold cyan]auth/[/bold cyan].")
             console.print("  2. Gunakan [dim]auth/sample_auth_state.json[/dim] sebagai template struktur file.")
-            console.print("  3. Session ini akan dipakai saat scan dan saat executor dijalankan.")
-            console.input("  [green]Tekan Enter jika file session sudah siap...[/green]")
+            console.print("  3. This session will be used during scan and executor run.")
+            console.input("  [green]Press Enter once the session file is ready...[/green]")
 
         console.print("\n[bold]Step 4: Additional Instructions (Optional)[/bold]")
-        console.print("[dim]Ketik /profile_name.txt untuk load profile dari folder instructions/[/dim]")
+        console.print("[dim]Type /profile_name.txt to load a profile from the instructions/ folder[/dim]")
         instruction = ""
         instruction_lines = []
 
@@ -602,9 +914,9 @@ def main():
                 profile_path = Path("instructions") / profile_name
                 if profile_path.exists():
                     instruction = profile_path.read_text(encoding="utf-8")
-                    console.print(f"[green][OK] Profil instruksi dimuat dari {profile_path}[/green]")
+                    console.print(f"[green][OK] Instruction profile loaded from {profile_path}[/green]")
                 else:
-                    console.print(f"[red][ERR] Profil instruksi {profile_path} tidak ditemukan. Menggunakan instruksi kosong.[/red]")
+                    console.print(f"[red][ERR] Instruction profile {profile_path} not found. Using empty instruction.[/red]")
             else:
                 if first_line.lower() != "selesai" and first_line != "":
                     instruction_lines.append(first_line)
@@ -625,13 +937,13 @@ def main():
         console.print("  [1] Ringan - 1 linked page")
         console.print("  [2] Normal - 3 linked pages")
         console.print("  [3] Lebih luas - 5 linked pages")
-        crawl_choice = console.input("  [cyan]Pilih [1/2/3] (Default: 2): [/cyan]").strip()
+        crawl_choice = console.input("  [cyan]Select [1/2/3] (Default: 2): [/cyan]").strip()
         crawl_limit = {"1": 1, "2": 3, "3": 5}.get(crawl_choice, 3)
 
         console.print("\n[bold]Step 6: Adaptive Recrawl[/bold]")
-        console.print("  [1] Aktif - jika confidence rendah, agent akan scan ulang dengan linked pages lebih banyak")
-        console.print("  [2] Nonaktif - gunakan hasil scan awal saja")
-        adaptive_choice = console.input("  [cyan]Pilih [1/2] (Default: 1): [/cyan]").strip()
+        console.print("  [1] Enabled - if confidence is low, the agent rescans with more linked pages")
+        console.print("  [2] Disabled - use the initial scan result only")
+        adaptive_choice = console.input("  [cyan]Select [1/2] (Default: 1): [/cyan]").strip()
         adaptive_recrawl = adaptive_choice != "2"
         execute_now = None
         executor_headless = True
@@ -647,6 +959,7 @@ def main():
             adaptive_recrawl,
             execute_now=execute_now,
             executor_headless=executor_headless,
+            run_name=args.run_name if args.url else None,
         )
         console.print("")
 

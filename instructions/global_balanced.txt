@@ -1,0 +1,8 @@
+Use a balanced end-to-end quality pass across the whole app.
+
+Cover:
+- Core user journey from start to completion
+- Input, interaction, and feedback quality
+- Data save/load consistency across screens
+- Error handling, recovery path, and state persistence
+- Major UI, UX, and functional regression signals

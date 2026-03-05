@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Visual Changes | TracePilot{% endblock %}
+{% block header_kicker %}Visual Regression Testing{% endblock %}
+{% block header_title %}Visual Changes{% endblock %}
+{% block header_subtitle %}Review changed visual runs and inspect text/style/layout deltas from baseline snapshots.{%
+endblock %}
+{% block content %}
+
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Visual snapshot</p>
+      <h2>Changed runs</h2>
+    </div>
+    <div class="artifact-groups">
+      <span class="panel-badge">{{ focus_runs|length }} visible</span>
+      <span class="panel-badge">Dev ID: {{ vrt_feature_id }}</span>
+    </div>
+  </div>
+  <div class="run-grid">
+    {% for run in focus_runs %}
+    <article class="run-card run-card-featured">
+      <div class="run-card-top">
+        <span class="run-name">{{ run.run_name }}</span>
+        <span class="badge {% if run.vrt_change_count %}badge-skipped{% else %}badge-passed{% endif %}">
+          {{ run.vrt_change_count or 0 }} changed
+        </span>
+      </div>
+      <h3>{{ run.title or run.run_name }}</h3>
+      <p>{{ run.url or "-" }}</p>
+      <dl class="mini-stats">
+        <div>
+          <dt>Text</dt>
+          <dd>{{ run.vrt_summary.text_change_count or 0 }}</dd>
+        </div>
+        <div>
+          <dt>Style</dt>
+          <dd>{{ run.vrt_summary.style_change_count or 0 }}</dd>
+        </div>
+        <div>
+          <dt>Layout</dt>
+          <dd>{{ run.vrt_summary.layout_change_count or 0 }}</dd>
+        </div>
+        <div>
+          <dt>Baseline</dt>
+          <dd>{{ run.vrt_baseline_run or "-" }}</dd>
+        </div>
+        <div>
+          <dt>Visual status</dt>
+          <dd>{{ run.visual_regression_status or "-" }}</dd>
+        </div>
+        <div>
+          <dt>Pixel diff</dt>
+          <dd>{{ ((run.visual_regression_ratio or 0) * 100)|round(3) }}%</dd>
+        </div>
+        <div>
+          <dt>Approval</dt>
+          <dd>{{ run.visual_regression_approval_status or "pending" }}</dd>
+        </div>
+      </dl>
+      <div class="artifact-groups">
+        <a class="artifact-link" href="{{ url_for('vrt_monitor_page', run_name=run.run_name) }}">Open Diff
+          Monitor</a>
+        <a class="artifact-link" href="{{ url_for('run_visual_diff_api', run_name=run.run_name) }}">Open Visual Diff API</a>
+        <a class="artifact-link" href="{{ url_for('run_detail', run_name=run.run_name) }}">Open run detail</a>
+      </div>
+    </article>
+    {% else %}
+    <p class="empty-state">No visual regression runs available for comparison yet.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

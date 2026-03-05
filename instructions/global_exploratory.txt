@@ -1,0 +1,8 @@
+Run exploratory testing with realistic and edge user behavior.
+
+Cover:
+- Normal user paths with varied timing and action order
+- Unexpected input combinations and sequence switching
+- Back/forward navigation and interrupted interaction
+- Ambiguous states, unclear messages, and dead-end paths
+- Any behavior that indicates weak product assumptions

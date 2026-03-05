@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block title %}Visual Regression Testing | TracePilot{% endblock %}
+{% block header_kicker %}Visual Regression Testing{% endblock %}
+{% block header_title %}Visual Regression Scan{% endblock %}
+{% block header_subtitle %}Generate a baseline visual snapshot from a target URL before monitoring visual changes.{%
+endblock %}
+{% block content %}
+
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Visual scan</p>
+      <h2>Start Visual Regression Testing from URL</h2>
+    </div>
+    <div class="artifact-groups">
+      <span class="panel-badge">Step 1</span>
+      <span class="panel-badge">Dev ID: {{ vrt_feature_id }}</span>
+    </div>
+  </div>
+  <form id="vrt-job-form" class="form-stack">
+    <div class="form-grid">
+      <div class="input-group input-group-full">
+        <label for="vrt-url">Target URL</label>
+        <input id="vrt-url" type="text" name="url" placeholder="https://example.com" required>
+        <p class="field-inline-note" id="vrt-url-hint">* Use a full URL (example: https://example.com/)</p>
+      </div>
+      <div class="input-group">
+        <label for="vrt-crawl-limit">Mini crawl</label>
+        <select id="vrt-crawl-limit" name="crawl_limit">
+          <option value="1" selected>1 page</option>
+          <option value="3">3 pages</option>
+        </select>
+      </div>
+      <div class="input-group">
+        <label for="vrt-use-auth">Use saved auth state</label>
+        <select id="vrt-use-auth" name="use_auth">
+          <option value="no" selected>No</option>
+          <option value="yes">Yes</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-actions">
+      <div class="form-actions-buttons">
+        <button class="primary-button" type="submit">Run VRT scan</button>
+      </div>
+      <p class="helper-text" id="vrt-job-status" role="status" aria-live="polite"></p>
+    </div>
+    <div class="artifact-groups vrt-next-actions" id="vrt-next-actions">
+      <a class="artifact-link" href="{{ url_for('vrt_changes_page') }}">Open Visual Changes</a>
+      <a class="artifact-link" href="{{ url_for('vrt_monitor_page') }}">Open Diff Monitor</a>
+    </div>
+  </form>
+</section>
+
+<section class="panel hidden-panel" id="vrt-inline-queue">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Live jobs</p>
+      <h2>Execution queue</h2>
+    </div>
+    <button id="vrt-refresh-queue" class="ghost-button" type="button">Refresh queue</button>
+  </div>
+  <div id="vrt-inline-jobs" class="job-list">
+    <p class="empty-state">No active jobs yet.</p>
+  </div>
+</section>
+
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const vrtJobForm = document.getElementById("vrt-job-form");
+    const vrtJobStatus = document.getElementById("vrt-job-status");
+    const vrtUrlInput = document.getElementById("vrt-url");
+    const vrtUrlHint = document.getElementById("vrt-url-hint");
+    const nextActions = document.getElementById("vrt-next-actions");
+    const inlineQueuePanel = document.getElementById("vrt-inline-queue");
+    const inlineJobs = document.getElementById("vrt-inline-jobs");
+    const refreshQueueButton = document.getElementById("vrt-refresh-queue");
+    const submitButton = vrtJobForm?.querySelector('button[type="submit"]');
+    let isSubmitting = false;
+
+    function validateVrtUrl(raw) {
+      const value = String(raw || "").trim();
+      if (!value) return { valid: false, message: "URL is required." };
+      const normalized = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+      try {
+        const parsed = new URL(normalized);
+        if (!parsed.hostname) return { valid: false, message: "URL host is missing." };
+        return { valid: true, message: `* Normalized to ${parsed.toString()}` };
+      } catch (_error) {
+        return { valid: false, message: "Invalid URL format." };
+      }
+    }
+
+    function updateVrtUrlValidation() {
+      const result = validateVrtUrl(vrtUrlInput?.value || "");
+      if (vrtUrlHint) {
+        vrtUrlHint.textContent = result.message;
+        vrtUrlHint.classList.toggle("is-error", !result.valid && !!String(vrtUrlInput?.value || "").trim());
+      }
+      if (submitButton) {
+        submitButton.disabled = !result.valid || isSubmitting;
+      }
+      return result.valid;
+    }
+
+    function renderInlineJobs(jobs) {
+      if (!inlineJobs) return;
+      if (!Array.isArray(jobs) || !jobs.length) {
+        inlineJobs.innerHTML = '<p class="empty-state">No active jobs yet.</p>';
+        return;
+      }
+      inlineJobs.innerHTML = "";
+      jobs.slice(0, 8).forEach((job) => {
+        const logLines = Array.isArray(job.log_lines) ? job.log_lines : [];
+        const isLogCollapsed = logLines.length > 40;
+        const fullLog = logLines.join("\n");
+        const previewLog = isLogCollapsed ? logLines.slice(0, 40).join("\n") : fullLog;
+        const isEmptyLog = !previewLog;
+        const logText = previewLog || "Waiting for log output... Click Refresh queue.";
+        const runName = String(job.run_name || "").trim();
+        const mode = String(job?.payload?.mode || "").toLowerCase();
+        const sourceLabel = mode === "vrt_scan" ? "VRT Scan" : mode === "automation_test" ? "Automation" : "Scenario";
+        const createdAt = String(job.created_at || "-");
+        const createdMs = Date.parse(createdAt);
+        const updatedMs = Date.parse(String(job.updated_at || "")) || Date.now();
+        const duration = Number.isFinite(createdMs) ? `${Math.max(0, Math.round((updatedMs - createdMs) / 1000))}s` : "-";
+        const card = document.createElement("article");
+        card.className = `job-card job-${String(job.status || "")}`;
+        card.innerHTML = `
+          <header><strong>${String(job.payload?.url || "-")}</strong><span>${String(job.status || "-")}</span></header>
+          <div class="job-meta">
+            <span class="panel-badge">Source: ${sourceLabel}</span>
+            <span class="panel-badge">Started: ${createdAt}</span>
+            <span class="panel-badge">Duration: ${duration}</span>
+          </div>
+          <div class="job-command-viewer mono">${(job.command || []).join(" ")}</div>
+          <div class="job-actions">
+            ${runName ? `<a class="inline-link" href="/runs/${encodeURIComponent(runName)}">Open run ${runName}</a>` : ""}
+            ${runName ? `<button class="inline-mini-button" type="button" data-copy-run-link="/runs/${encodeURIComponent(runName)}">Copy run link</button>` : ""}
+            ${isLogCollapsed ? `<button class="inline-mini-button" type="button" data-log-toggle>Show more</button>` : ""}
+          </div>
+          <pre class="job-log-viewer ${isLogCollapsed ? "is-collapsed" : ""} ${isEmptyLog ? "is-empty" : ""}">${logText}</pre>
+        `;
+        const logView = card.querySelector(".job-log-viewer");
+        if (logView) {
+          logView.dataset.previewLog = previewLog || "Waiting for log output...";
+          logView.dataset.fullLog = fullLog || "Waiting for log output...";
+        }
+        inlineJobs.appendChild(card);
+      });
+      inlineJobs.querySelectorAll("[data-copy-run-link]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const path = button.getAttribute("data-copy-run-link");
+          if (!path) return;
+          try {
+            await navigator.clipboard.writeText(`${window.location.origin}${path}`);
+            button.textContent = "Copied";
+            window.setTimeout(() => {
+              button.textContent = "Copy run link";
+            }, 900);
+          } catch (_error) {
+          }
+        });
+      });
+      inlineJobs.querySelectorAll("[data-log-toggle]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const card = button.closest(".job-card");
+          const pre = card?.querySelector(".job-log-viewer");
+          if (!pre) return;
+          const collapsed = pre.classList.toggle("is-collapsed");
+          pre.textContent = collapsed ? (pre.dataset.previewLog || "") : (pre.dataset.fullLog || "");
+          button.textContent = collapsed ? "Show more" : "Show less";
+        });
+      });
+    }
+
+    async function refreshInlineQueue() {
+      if (!inlineJobs) return;
+      try {
+        const response = await fetch("/api/jobs");
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Failed to load queue.");
+        }
+        const activeJobs = (payload.jobs || []).filter((job) => {
+          const status = String(job?.status || "").toLowerCase();
+          return status === "queued" || status === "running";
+        });
+        renderInlineJobs(activeJobs);
+      } catch (error) {
+        inlineJobs.innerHTML = `<p class="empty-state">${error.message || "Failed to load queue."}</p>`;
+      }
+    }
+
+    vrtUrlInput?.addEventListener("input", updateVrtUrlValidation);
+    updateVrtUrlValidation();
+
+    vrtJobForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!updateVrtUrlValidation()) {
+        vrtJobStatus.textContent = "Fix URL format first.";
+        return;
+      }
+      if (isSubmitting) return;
+      isSubmitting = true;
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.classList.add("is-loading");
+        submitButton.textContent = "Submitting";
+      }
+      vrtJobStatus.textContent = "Submitting VRT scan job...";
+      if (nextActions) {
+        nextActions.innerHTML = "";
+      }
+      const data = new FormData(vrtJobForm);
+      try {
+        const response = await fetch("/api/vrt-jobs", { method: "POST", body: data });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "Failed to submit VRT scan.");
+        }
+        vrtJobStatus.textContent = `VRT scan job queued: ${payload.job.run_name}`;
+        if (inlineQueuePanel) {
+          inlineQueuePanel.classList.remove("hidden-panel");
+        }
+        refreshInlineQueue();
+        if (nextActions && payload?.job?.run_name) {
+          const runName = encodeURIComponent(payload.job.run_name);
+          nextActions.innerHTML = `
+            <a class="artifact-link" href="{{ url_for('vrt_changes_page') }}">Open VRT Changes</a>
+            <a class="artifact-link" href="{{ url_for('vrt_monitor_page') }}?run_name=${runName}">Open Diff Monitor for this run</a>
+          `;
+        }
+      } catch (error) {
+        vrtJobStatus.textContent = error.message || "Failed to submit VRT scan.";
+      } finally {
+        isSubmitting = false;
+        if (submitButton) {
+          submitButton.classList.remove("is-loading");
+          submitButton.disabled = false;
+          submitButton.textContent = "Run VRT scan";
+        }
+        updateVrtUrlValidation();
+      }
+    });
+
+    refreshQueueButton?.addEventListener("click", () => {
+      refreshInlineQueue();
+    });
+  });
+</script>
+{% endblock %}
+{% endblock %}

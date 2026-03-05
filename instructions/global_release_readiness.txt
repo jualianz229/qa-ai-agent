@@ -1,0 +1,8 @@
+Run holistic release-readiness validation before sign-off.
+
+Cover:
+- Core business journey quality and stability
+- High-risk behavior from functionality, data, and UX angles
+- Defect severity triage with reproducible evidence
+- Pass/fail checkpoint summary for go/no-go decision
+- Clear residual risk notes and recommended follow-up

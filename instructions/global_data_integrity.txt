@@ -1,0 +1,8 @@
+Prioritize end-to-end data integrity in all observed flows.
+
+Cover:
+- Input accepted/rejected according to business expectations
+- Stored data remains accurate after refresh and revisit
+- Derived values remain consistent across related views
+- No silent truncation, mutation, or stale state leaks
+- Error states do not corrupt existing valid data

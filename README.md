@@ -10,7 +10,7 @@ An intelligent AI-powered agent designed to automatically scan any website and g
 - **Auto-Prefix IDs**: Intelligently creates test cases with Contextual IDs like `LGN-001` (Login), `CHK-001` (Checkout) etc., entirely replacing boring sequential numbers.
 - **Executive Summary Generator**: Automatically evaluates the test strategy output to generate a `.md` risk assessment and QA Plan summary.
 - **Batch Processing**: Supports scanning multiple lists of URLs reading from a simple `.txt` file list.
-- **Instruction Profiles**: Capable of reading text profiles (e.g. `instructions/contoh_profil.txt`) to hone testing on precisely specific features (e.g., "Prioritize Form Security and Auth").
+- **Instruction Profiles**: Capable of reading text profiles (e.g. `instructions/security_bug_profile.txt`) to hone testing on precisely specific features (e.g., "Prioritize Form Security and Auth").
 
 ## ⚙️ Installation
 
@@ -44,7 +44,7 @@ python agent.py
    - Type a single target website (e.g. `saucedemo.com`).
    - Or, provide a batch list text file (e.g. `example_urls.txt`).
 2. **Choose the CSV Delimiter**: Select `(,)` global standard, or `(;)` for localized Excel layouts.
-3. **Optional Custom Instructions**: Instruct the AI directly via text input or load a testing profile (`/contoh_profil.txt`) to override the target test paths.
+3. **Optional Custom Instructions**: Instruct the AI directly via text input or load a testing profile (`/security_bug_profile.txt`) to override the target test paths.
 4. **Result generation**: The tool will scan the DOM, offload logic to the AI, safely convert its JSON array into a bulletproof `utf-8-sig` CSV format, then write the CSV and a Markdown Executive Summary inside the `/Result` folder.
 
 ## 📁 Repository Structure

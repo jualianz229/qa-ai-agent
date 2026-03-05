@@ -1,0 +1,8 @@
+Prioritize baseline accessibility across all core flows.
+
+Cover:
+- Logical structure, reading order, and semantic clarity
+- Keyboard reachability and visible focus indication
+- Understandable labels, instructions, and error context
+- Sufficient contrast and non-color-only status indicators
+- Dynamic updates communicated in an accessible manner

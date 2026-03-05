@@ -9,41 +9,59 @@ import threading
 import time
 import uuid
 import csv
-from datetime import datetime
+import io
+from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
-from flask import Flask, abort, jsonify, render_template, request, send_file, url_for
+from flask import Flask, abort, jsonify, make_response, redirect, render_template, request, send_file, url_for
 
-from core.artifacts import execution_results_path, json_artifact_path
-from core.dashboard_data import (
+from core.common.artifacts import (
+    execution_results_path,
+    json_artifact_path,
+    recovery_actions_path,
+    visual_regression_approval_path,
+)
+from core.common.config import (
+    INSTRUCTIONS_DIR,
+    PROFILES_DIR,
+    RESULT_DIR,
+    ROOT_DIR,
+    FEEDBACK_DIR,
+)
+from core.common.dashboard_data import (
+    build_ai_safety_audit,
     build_benchmark_snapshot,
     build_knowledge_snapshot,
     build_run_comparison,
     build_run_detail,
+    build_triage_inbox,
     list_runs,
     safe_run_artifact,
+    sort_runs,
 )
-from core.executor import CodeGenerator
-from core.feedback_bank import merge_human_feedback
-from core.guardrails import CONTEXT_RULES, compile_instruction_contract
-from core.instruction_templates import (
+from end_to_end_automation.src.executor import CodeGenerator
+from core.common.feedback_bank import merge_human_feedback
+from core.common.guardrails import CONTEXT_RULES, compile_instruction_contract
+from core.common.instruction_templates import (
     ensure_instruction_templates,
     list_instruction_templates,
     load_instruction_template,
+    load_template_user_notes,
     resolve_instruction_template,
+    save_template_user_note,
     save_uploaded_template,
+    update_instruction_template,
 )
-from core.result_analyzer import analyze_execution_results, save_execution_summary
-from core.scanner import Scanner
-from core.site_profiles import derive_cluster_keys, merge_execution_learning
+from core.common.jobs import get_all_jobs, get_job
+from core.common.result_analyzer import analyze_execution_results, save_execution_summary
+from core.common.scanner import Scanner
+from core.common.site_profiles import derive_cluster_keys, merge_execution_learning
+from core.common.utils import is_automation_or_recovery_run, is_automation_run
+from test_case_generator.web.routes.test_case_generator import bp as test_case_generator_bp
+from end_to_end_automation.web.routes.end_to_end_automation import bp as end_to_end_automation_bp
+from visual_regression_testing.web.routes.visual_regression_testing import bp as visual_regression_testing_bp
 
-
-ROOT_DIR = Path(__file__).resolve().parent
-RESULT_DIR = ROOT_DIR / "Result"
-PROFILES_DIR = ROOT_DIR / "site_profiles"
-FEEDBACK_DIR = PROFILES_DIR / "feedback"
-ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-INSTRUCTIONS_DIR = ROOT_DIR / "instructions"
 
 app = Flask(
     __name__,
@@ -54,314 +72,205 @@ app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.jinja_env.auto_reload = True
 
-jobs_lock = threading.Lock()
-jobs: dict[str, dict] = {}
 ensure_instruction_templates(INSTRUCTIONS_DIR)
 csv_runner = Scanner(RESULT_DIR)
 
+app.register_blueprint(test_case_generator_bp)
+app.register_blueprint(end_to_end_automation_bp)
+app.register_blueprint(visual_regression_testing_bp)
 
-def strip_ansi(text: str) -> str:
-    return ANSI_PATTERN.sub("", text or "")
 
-
-def _form_bool(value: str | None, default: bool = False) -> bool:
-    normalized = str(value or "").strip().lower()
-    if not normalized:
-        return default
-    return normalized in {"1", "true", "yes", "y", "on", "iya"}
+@app.context_processor
+def inject_sidebar_scenario_runs():
+    runs = [item for item in list_runs(RESULT_DIR) if not is_automation_or_recovery_run(item.get("run_name", ""))]
+    runs = sorted(runs, key=lambda item: float(item.get("modified_ts", 0) or 0), reverse=True)[:12]
+    return {"sidebar_scenario_runs": runs}
 
 
 def _resolve_run_dir(run_name: str) -> Path:
     candidate = (RESULT_DIR / run_name).resolve()
     result_root = RESULT_DIR.resolve()
     if not candidate.is_relative_to(result_root):
-        raise ValueError("Run path tidak valid.")
+        raise ValueError("Invalid run path.")
     return candidate
 
 
-def _permissive_page_facts() -> dict:
-    facts = {}
-    for rule in CONTEXT_RULES.values():
-        requires = rule.get("requires")
-        requires_any = rule.get("requires_any", ())
-        if requires:
-            facts[requires] = True
-        for item in requires_any:
-            facts[item] = True
-    return facts
-
-
-def _build_instruction_precheck(template_name: str, instruction: str) -> dict:
-    template_name = str(template_name or "").strip()
-    instruction = str(instruction or "").strip()
-    template = None
-    template_content = ""
-    if template_name:
-        template = load_instruction_template(template_name, INSTRUCTIONS_DIR)
-        template_content = str(template.get("content", "")).strip()
-
-    combined_parts = [part for part in (template_content, instruction) if part]
-    combined_instruction = "\n\n".join(combined_parts).strip()
-    contract = compile_instruction_contract(combined_instruction, _permissive_page_facts())
-    return {
-        "template_name": template_name,
-        "template_used": bool(template_name),
-        "combined_instruction": combined_instruction,
-        "contract": contract,
-        "is_valid": not contract.get("conflicts"),
-    }
-
-
-def create_job(payload: dict) -> dict:
-    job_id = uuid.uuid4().hex[:12]
-    existing_runs = {item["run_name"] for item in list_runs(RESULT_DIR)}
-    job = {
-        "id": job_id,
-        "status": "queued",
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "payload": payload,
-        "log_lines": [],
-        "run_name": "",
-        "command": [],
-    }
-    with jobs_lock:
-        jobs[job_id] = job
-    thread = threading.Thread(target=_run_job, args=(job_id, payload, existing_runs), daemon=True)
-    thread.start()
-    return job
-
-
-def create_retry_failed_job(run_name: str, executor_headed: bool = False) -> dict:
-    source_run_dir = RESULT_DIR / run_name
-    if not source_run_dir.exists():
-        raise FileNotFoundError(run_name)
-    source_detail = build_run_detail(source_run_dir)
-    failed_ids = [row["id"] for row in source_detail.get("case_rows", []) if row.get("status") == "failed"]
-    if not source_detail.get("execution_ran"):
-        raise ValueError("Run ini belum punya hasil eksekusi dari AI Executor.")
-    if not failed_ids:
-        raise ValueError("Tidak ada failed case yang bisa di-retry.")
-
-    retry_run_name = f"{run_name}_retry_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    job_id = uuid.uuid4().hex[:12]
-    payload = {
-        "mode": "retry_failed",
-        "url": source_detail.get("url", ""),
-        "source_run_name": run_name,
-        "retry_run_name": retry_run_name,
-        "executor_headed": executor_headed,
-        "failed_ids": failed_ids,
-    }
-    job = {
-        "id": job_id,
-        "status": "queued",
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "payload": payload,
-        "log_lines": [],
-        "run_name": retry_run_name,
-        "command": ["retry-failed-only", run_name, retry_run_name],
-    }
-    with jobs_lock:
-        jobs[job_id] = job
-    thread = threading.Thread(target=_run_retry_failed_job, args=(job_id, payload), daemon=True)
-    thread.start()
-    return job
-
-
-def _run_job(job_id: str, payload: dict, existing_runs: set[str]) -> None:
-    command = [
-        sys.executable,
-        "agent.py",
-        "--url",
-        payload["url"],
-        "--csv-sep",
-        payload["csv_sep"],
-        "--crawl-limit",
-        str(payload["crawl_limit"]),
-    ]
-    if payload.get("template_path"):
-        command.extend(["--instruction-file", payload["template_path"]])
-    if payload.get("instruction"):
-        command.extend(["--instruction", payload["instruction"]])
-    if payload.get("use_auth"):
-        command.append("--use-auth")
-    if not payload.get("adaptive_recrawl", True):
-        command.append("--disable-adaptive-recrawl")
-    if payload.get("run_executor"):
-        command.append("--run-executor")
-    if payload.get("executor_headed"):
-        command.append("--executor-headed")
-
-    _update_job(job_id, status="running", command=command)
-    exit_code = _run_logged_process(job_id, command, ROOT_DIR)
-    new_runs = [item for item in list_runs(RESULT_DIR) if item["run_name"] not in existing_runs]
-    run_name = new_runs[0]["run_name"] if new_runs else ""
-    status = "completed" if exit_code == 0 else "failed"
-    _update_job(job_id, status=status, run_name=run_name, exit_code=exit_code)
-
-
-def _run_retry_failed_job(job_id: str, payload: dict) -> None:
+def _load_json_file(path: Path) -> dict:
+    if not path.exists():
+        return {}
     try:
-        _update_job(job_id, status="running")
-        prepared = _prepare_retry_run(payload["source_run_name"], payload["retry_run_name"], payload.get("executor_headed", False))
-        _append_job_log(job_id, f"Prepared retry run: {prepared['run_name']}")
-        _append_job_log(job_id, f"Failed cases: {', '.join(prepared['failed_ids'])}")
-        command = [sys.executable, prepared["script_path"].name]
-        _update_job(job_id, command=command, run_name=prepared["run_name"])
-        exit_code = _run_logged_process(job_id, command, prepared["script_path"].parent)
-        if exit_code == 0 and prepared["results_path"].exists():
-            summary = analyze_execution_results(prepared["results_path"])
-            save_execution_summary(prepared["results_path"], summary)
-            csv_runner.update_csv_with_execution_results(prepared["csv_path"], prepared["results_path"], ",")
-        status = "completed" if exit_code == 0 else "failed"
-        _update_job(job_id, status=status, exit_code=exit_code)
-    except Exception as exc:
-        _append_job_log(job_id, f"Retry failed only error: {exc}")
-        _update_job(job_id, status="failed", exit_code=1)
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
-def _run_logged_process(job_id: str, command: list[str], cwd: Path) -> int:
-    process = subprocess.Popen(
-        command,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-
-    line_queue: queue.Queue[str] = queue.Queue()
-
-    def reader() -> None:
-        assert process.stdout is not None
-        for line in process.stdout:
-            line_queue.put(strip_ansi(line.rstrip()))
-
-    reader_thread = threading.Thread(target=reader, daemon=True)
-    reader_thread.start()
-
-    while process.poll() is None or not line_queue.empty():
-        try:
-            line = line_queue.get(timeout=0.2)
-        except queue.Empty:
-            continue
-        _append_job_log(job_id, line)
-
-    reader_thread.join(timeout=1)
-    return process.wait()
+def _load_visual_approval(run_name: str) -> dict:
+    run_dir = _resolve_run_dir(run_name)
+    if not run_dir.exists():
+        raise FileNotFoundError(run_name)
+    return _load_json_file(visual_regression_approval_path(run_dir, create=False))
 
 
-def _prepare_retry_run(source_run_name: str, retry_run_name: str, executor_headed: bool) -> dict:
-    source_run_dir = RESULT_DIR / source_run_name
-    retry_run_dir = RESULT_DIR / retry_run_name
-    retry_run_dir.mkdir(parents=True, exist_ok=True)
-    (retry_run_dir / "JSON").mkdir(parents=True, exist_ok=True)
-    (retry_run_dir / "Evidence" / "Video").mkdir(parents=True, exist_ok=True)
-
-    source_detail = build_run_detail(source_run_dir)
-    failed_ids = [row["id"] for row in source_detail.get("case_rows", []) if row.get("status") == "failed"]
-    if not failed_ids:
-        raise ValueError("Tidak ada failed case yang bisa di-retry.")
-
-    source_plan_path = next((source_run_dir / "JSON").glob("Execution_Plan_*.json"), None)
-    source_csv_path = next(source_run_dir.glob("*.csv"), None)
-    if not source_plan_path or not source_csv_path:
-        raise FileNotFoundError("Execution plan atau CSV sumber tidak ditemukan.")
-
-    execution_plan = json.loads(source_plan_path.read_text(encoding="utf-8"))
-    filtered_plans = [plan for plan in execution_plan.get("plans", []) if str(plan.get("id", "")).strip() in failed_ids]
-    if not filtered_plans:
-        raise ValueError("Execution plan untuk failed case tidak ditemukan.")
-
-    filtered_plan = {**execution_plan, "plans": filtered_plans}
-    filtered_plan_path = json_artifact_path(retry_run_dir, f"Execution_Plan_{retry_run_name}.json")
-    filtered_plan_path.write_text(json.dumps(filtered_plan, indent=2), encoding="utf-8")
-
-    retry_csv_path = retry_run_dir / f"{retry_run_name}.csv"
-    with source_csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    fieldnames = list(rows[0].keys()) if rows else []
-    filtered_rows = [row for row in rows if str(row.get("ID", "")).strip() in failed_ids]
-    with retry_csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(filtered_rows)
-
-    skip_prefixes = {
-        "Execution_Plan_",
-        "Execution_Results",
-        "Execution_Debug",
-        "Execution_Learning",
-        "Execution_Checkpoints",
+def _save_visual_approval(run_name: str, status: str, note: str = "", compare_run: str = "", actor: str = "manual") -> dict:
+    run_dir = _resolve_run_dir(run_name)
+    if not run_dir.exists():
+        raise FileNotFoundError(run_name)
+    status = str(status or "").strip().lower()
+    if status not in {"approved", "rejected", "pending"}:
+        raise ValueError("Invalid approval status.")
+    payload = {
+        "run_name": run_name,
+        "status": status,
+        "note": str(note or "").strip(),
+        "compare_run": str(compare_run or "").strip(),
+        "updated_by": str(actor or "manual").strip(),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
-    for artifact in (source_run_dir / "JSON").glob("*.json"):
-        if any(artifact.name.startswith(prefix) for prefix in skip_prefixes):
+    visual_regression_approval_path(run_dir).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
+
+def _append_recovery_action(run_name: str, action: dict) -> None:
+    run_dir = _resolve_run_dir(run_name)
+    if not run_dir.exists():
+        return
+    path = recovery_actions_path(run_dir)
+    payload = _load_json_file(path)
+    entries = list(payload.get("actions", []))
+    item = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "run_name": run_name,
+        **dict(action or {}),
+    }
+    entries.append(item)
+    entries = entries[-60:]
+    path.write_text(json.dumps({"actions": entries}, indent=2), encoding="utf-8")
+
+
+def _get_recovery_actions(run_name: str, limit: int = 20) -> list[dict]:
+    run_dir = _resolve_run_dir(run_name)
+    if not run_dir.exists():
+        raise FileNotFoundError(run_name)
+    path = recovery_actions_path(run_dir, create=False)
+    payload = _load_json_file(path)
+    actions = list(payload.get("actions", []))
+    return actions[-max(1, int(limit or 1)):]
+
+
+def _collect_recovery_audit_rows(limit_per_run: int = 40) -> list[dict]:
+    rows = []
+    for run in list_runs(RESULT_DIR):
+        run_name = str(run.get("run_name", "")).strip()
+        if not run_name:
             continue
-        shutil.copy2(artifact, retry_run_dir / "JSON" / artifact.name)
+        try:
+            actions = _get_recovery_actions(run_name, limit=limit_per_run)
+        except Exception:
+            continue
+        for action in actions:
+            rows.append(
+                {
+                    "run_name": run_name,
+                    "timestamp": str(action.get("timestamp", "")).strip(),
+                    "action": str(action.get("action", "")).strip(),
+                    "strategy": str(action.get("strategy", "")).strip(),
+                    "status": str(action.get("status", "")).strip(),
+                    "reason": str(action.get("reason", "")).strip(),
+                    "job_id": str(action.get("job_id", "")).strip(),
+                    "target_run": str(action.get("target_run", "")).strip(),
+                }
+            )
+    rows.sort(key=lambda item: (item.get("timestamp", ""), item.get("run_name", "")), reverse=True)
+    return rows
 
-    retry_meta_path = json_artifact_path(retry_run_dir, "Retry_Metadata.json")
-    retry_meta_path.write_text(
-        json.dumps(
-            {
-                "source_run_name": source_run_name,
-                "retry_run_name": retry_run_name,
-                "failed_ids": failed_ids,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
 
-    script_path = CodeGenerator(None).generate_pom_script(
-        {"run_dir": str(retry_run_dir)},
-        filtered_plan_path,
-        headless=not executor_headed,
-    )
+def _recovery_metrics_snapshot(limit_per_run: int = 60) -> dict:
+    rows = _collect_recovery_audit_rows(limit_per_run=limit_per_run)
+    strategy_counts = {
+        "safe_rerun": {"completed": 0, "failed": 0, "canceled": 0},
+        "retry_failed": {"completed": 0, "failed": 0, "canceled": 0},
+    }
+    skipped = 0
+    top_failure_reasons: dict[str, int] = {}
+    for item in rows:
+        strategy = str(item.get("strategy", "")).strip().lower()
+        status = str(item.get("status", "")).strip().lower()
+        reason = str(item.get("reason", "")).strip()
+        if strategy in strategy_counts and status in {"completed", "failed", "canceled"}:
+            strategy_counts[strategy][status] += 1
+        if status == "skipped":
+            skipped += 1
+        if status in {"failed", "canceled", "skipped"} and reason:
+            top_failure_reasons[reason] = top_failure_reasons.get(reason, 0) + 1
+
+    job_items = get_all_jobs()
+    pending_recovery_jobs = 0
+    for job in job_items:
+        payload = job.get("payload", {}) if isinstance(job.get("payload", {}), dict) else {}
+        mode = str(payload.get("mode", "")).strip().lower()
+        status = str(job.get("status", "")).strip().lower()
+        if mode in {"safe_rerun", "retry_failed"} and status in {"queued", "running"}:
+            pending_recovery_jobs += 1
+
+    def _success_rate(bucket: dict) -> float:
+        completed = int(bucket.get("completed", 0) or 0)
+        failed = int(bucket.get("failed", 0) or 0) + int(bucket.get("canceled", 0) or 0)
+        total = completed + failed
+        return round(completed / total, 2) if total else 0.0
 
     return {
-        "run_name": retry_run_name,
-        "run_dir": retry_run_dir,
-        "script_path": script_path,
-        "csv_path": retry_csv_path,
-        "results_path": execution_results_path(retry_run_dir),
-        "failed_ids": failed_ids,
+        "total_actions": len(rows),
+        "pending_recovery_jobs": pending_recovery_jobs,
+        "skipped_count": skipped,
+        "strategy": {
+            "safe_rerun": {
+                **strategy_counts["safe_rerun"],
+                "success_rate": _success_rate(strategy_counts["safe_rerun"]),
+            },
+            "retry_failed": {
+                **strategy_counts["retry_failed"],
+                "success_rate": _success_rate(strategy_counts["retry_failed"]),
+            },
+        },
+        "top_failure_reasons": [
+            {"reason": key, "count": value}
+            for key, value in sorted(top_failure_reasons.items(), key=lambda item: (-item[1], item[0]))[:6]
+        ],
     }
-
-
-def _append_job_log(job_id: str, line: str) -> None:
-    with jobs_lock:
-        job = jobs[job_id]
-        job["log_lines"].append(line)
-        job["log_lines"] = job["log_lines"][-200:]
-        job["updated_at"] = datetime.now().isoformat(timespec="seconds")
-
-
-def _update_job(job_id: str, **fields) -> None:
-    with jobs_lock:
-        job = jobs[job_id]
-        job.update(fields)
-        job["updated_at"] = datetime.now().isoformat(timespec="seconds")
-
-
-def _get_job(job_id: str) -> dict:
-    with jobs_lock:
-        job = jobs.get(job_id)
-        if not job:
-            raise KeyError(job_id)
-        return json.loads(json.dumps(job))
 
 
 def dashboard_metrics() -> dict:
     runs = list_runs(RESULT_DIR)
+    scenario_runs = [item for item in runs if not is_automation_or_recovery_run(item.get("run_name", ""))]
+    automation_runs = [item for item in runs if is_automation_run(item.get("run_name", ""))]
+    recovery_metrics = _recovery_metrics_snapshot(limit_per_run=50)
+    triage_snapshot = build_triage_inbox(RESULT_DIR, limit=20)
+    safety_audit = build_ai_safety_audit(RESULT_DIR, limit=30)
+    safety_values = [int(item.get("safety_index", 0) or 0) for item in runs]
+    blocked_runs = sum(1 for item in runs if bool(item.get("execution_gate", {}).get("blocked", False)))
+    policy_failures = sum(1 for item in runs if not bool(item.get("policy_pack_report", {}).get("success", True)))
+    visual_regression_runs = sum(1 for item in runs if int(item.get("vrt_change_count", 0) or 0) > 0)
     totals = {
         "runs": len(runs),
+        "scenario_runs": len(scenario_runs),
+        "automation_runs": len(automation_runs),
         "cases": sum(item.get("total_cases", 0) for item in runs),
         "videos": sum(item.get("video_count", 0) for item in runs),
         "failed": sum(item.get("status_counts", {}).get("failed", 0) for item in runs),
         "alerts": sum(item.get("alert_count", 0) for item in runs),
+        "blocked_runs": blocked_runs,
+        "policy_failures": policy_failures,
+        "average_safety_index": int(round(sum(safety_values) / len(safety_values))) if safety_values else 0,
+        "recovery_actions": int(recovery_metrics.get("total_actions", 0) or 0),
+        "recovery_pending": int(recovery_metrics.get("pending_recovery_jobs", 0) or 0),
+        "safe_rerun_success_rate": int(round(float(recovery_metrics.get("strategy", {}).get("safe_rerun", {}).get("success_rate", 0.0) or 0.0) * 100)),
+        "retry_failed_success_rate": int(round(float(recovery_metrics.get("strategy", {}).get("retry_failed", {}).get("success_rate", 0.0) or 0.0) * 100)),
+        "recovery_top_failure_reasons": list(recovery_metrics.get("top_failure_reasons", []))[:4],
+        "vrt_runs": visual_regression_runs,
+        "needs_review": int(triage_snapshot.get("candidate_count", 0) or 0),
+        "triage_actionable": int(triage_snapshot.get("actionable_count", 0) or 0),
+        "regression_count": int(safety_audit.get("regression_count", 0) or 0),
+        "ai_safety_status": str(safety_audit.get("status", "unknown")),
     }
     return totals
 
@@ -369,25 +278,19 @@ def dashboard_metrics() -> dict:
 @app.get("/")
 def home():
     runs = list_runs(RESULT_DIR)[:8]
-    active_jobs = [_get_job(job_id) for job_id in list(jobs.keys())[-8:]][::-1]
-    templates = list_instruction_templates(INSTRUCTIONS_DIR)
+    risk_runs = sort_runs(list_runs(RESULT_DIR), mode="safety_risk")[:6]
+    active_jobs = get_all_jobs()[:8]
     knowledge_snapshot = build_knowledge_snapshot(profiles_dir=PROFILES_DIR)
     benchmark_snapshot = build_benchmark_snapshot(RESULT_DIR, limit=6)
     return render_template(
         "dashboard.html",
         runs=runs,
         active_jobs=active_jobs,
+        risk_runs=risk_runs,
         metrics=dashboard_metrics(),
-        templates=templates,
         knowledge_snapshot=knowledge_snapshot,
         benchmark_snapshot=benchmark_snapshot,
     )
-
-
-@app.get("/runs")
-def runs_page():
-    runs = list_runs(RESULT_DIR)
-    return render_template("runs.html", runs=runs, metrics=dashboard_metrics())
 
 
 @app.get("/runs/<run_name>")
@@ -428,64 +331,6 @@ def serve_artifact(run_name: str, relative_path: str):
     return send_file(artifact)
 
 
-@app.post("/api/jobs")
-def create_job_api():
-    template_name = request.form.get("template_name", "").strip()
-    template_path = ""
-    if template_name:
-        try:
-            template_path = str(resolve_instruction_template(template_name, INSTRUCTIONS_DIR))
-        except FileNotFoundError:
-            return jsonify({"ok": False, "error": "Template tidak ditemukan."}), 404
-    precheck = _build_instruction_precheck(template_name, request.form.get("instruction", ""))
-    if not precheck["is_valid"]:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "Instruksi konflik. Perbaiki dulu sebelum launch job.",
-                "precheck": precheck,
-            }
-        ), 400
-    payload = {
-        "url": request.form.get("url", "").strip(),
-        "instruction": request.form.get("instruction", "").strip(),
-        "template_name": template_name,
-        "template_path": template_path,
-        "csv_sep": request.form.get("csv_sep", ","),
-        "crawl_limit": int(request.form.get("crawl_limit", "3") or 3),
-        "use_auth": _form_bool(request.form.get("use_auth"), default=False),
-        "adaptive_recrawl": _form_bool(request.form.get("adaptive_recrawl"), default=True),
-        "run_executor": _form_bool(request.form.get("run_executor"), default=False),
-        "executor_headed": _form_bool(request.form.get("executor_headed"), default=False),
-    }
-    if not payload["url"]:
-        return jsonify({"ok": False, "error": "URL wajib diisi."}), 400
-    job = create_job(payload)
-    return jsonify({"ok": True, "job": job, "redirect": url_for("home")})
-
-
-@app.post("/api/instruction-precheck")
-def instruction_precheck_api():
-    template_name = request.form.get("template_name", "").strip()
-    try:
-        precheck = _build_instruction_precheck(template_name, request.form.get("instruction", ""))
-    except FileNotFoundError:
-        return jsonify({"ok": False, "error": "Template tidak ditemukan."}), 404
-    return jsonify({"ok": True, "precheck": precheck})
-
-
-@app.post("/api/runs/<run_name>/retry-failed")
-def retry_failed_job_api(run_name: str):
-    executor_headed = _form_bool(request.form.get("executor_headed"), default=False)
-    try:
-        job = create_retry_failed_job(run_name, executor_headed=executor_headed)
-    except FileNotFoundError:
-        return jsonify({"ok": False, "error": "Run tidak ditemukan."}), 404
-    except ValueError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
-    return jsonify({"ok": True, "job": job, "redirect": url_for("run_detail", run_name=job["run_name"])})
-
-
 @app.post("/api/runs/<run_name>/delete")
 def delete_run_api(run_name: str):
     try:
@@ -494,7 +339,7 @@ def delete_run_api(run_name: str):
         return jsonify({"ok": False, "error": str(exc)}), 400
 
     if not run_dir.exists() or not run_dir.is_dir():
-        return jsonify({"ok": False, "error": "Run tidak ditemukan."}), 404
+        return jsonify({"ok": False, "error": "Run not found."}), 404
 
     shutil.rmtree(run_dir)
     return jsonify({"ok": True, "deleted_run": run_name})
@@ -504,12 +349,12 @@ def delete_run_api(run_name: str):
 def run_feedback_api(run_name: str):
     run_dir = RESULT_DIR / run_name
     if not run_dir.exists():
-        return jsonify({"ok": False, "error": "Run tidak ditemukan."}), 404
+        return jsonify({"ok": False, "error": "Run not found."}), 404
 
     detail = build_run_detail(run_dir)
     url = str(detail.get("url", "")).strip()
     if not url:
-        return jsonify({"ok": False, "error": "Run ini belum punya URL sumber yang valid."}), 400
+        return jsonify({"ok": False, "error": "This run does not have a valid source URL yet."}), 400
 
     feedback_payload = {
         "feedback_type": request.form.get("feedback_type", "").strip(),
@@ -583,16 +428,13 @@ def run_feedback_api(run_name: str):
 
 @app.get("/api/jobs")
 def jobs_api():
-    with jobs_lock:
-        items = [json.loads(json.dumps(job)) for job in jobs.values()]
-    items.sort(key=lambda item: item["created_at"], reverse=True)
-    return jsonify({"jobs": items})
+    return jsonify({"jobs": get_all_jobs()})
 
 
 @app.get("/api/jobs/<job_id>")
 def job_detail_api(job_id: str):
     try:
-        job = _get_job(job_id)
+        job = get_job(job_id)
     except KeyError:
         abort(404)
     return jsonify({"job": job})
@@ -603,30 +445,218 @@ def runs_api():
     return jsonify({"runs": list_runs(RESULT_DIR)})
 
 
-@app.get("/api/templates")
-def templates_api():
-    return jsonify({"templates": list_instruction_templates(INSTRUCTIONS_DIR)})
-
-
-@app.get("/api/templates/<template_name>")
-def template_detail_api(template_name: str):
+@app.get("/api/runs/<run_name>/cases")
+def run_cases_api(run_name: str):
     try:
-        template = load_instruction_template(template_name, INSTRUCTIONS_DIR)
-    except FileNotFoundError:
-        abort(404)
-    return jsonify({"template": template})
-
-
-@app.post("/api/templates")
-def upload_template_api():
-    uploaded_file = request.files.get("template_file")
-    if not uploaded_file or not uploaded_file.filename:
-        return jsonify({"ok": False, "error": "Pilih file .txt terlebih dulu."}), 400
-    try:
-        template = save_uploaded_template(uploaded_file, INSTRUCTIONS_DIR)
+        run_dir = _resolve_run_dir(run_name)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
-    return jsonify({"ok": True, "template": template})
+    if not run_dir.exists():
+        return jsonify({"ok": False, "error": "Run not found."}), 404
+    detail = build_run_detail(run_dir)
+    cases = [
+        {
+            "id": str(row.get("id", "")).strip(),
+            "title": str(row.get("title", "")).strip(),
+            "status": str(row.get("status", "")).strip(),
+            "priority": str(row.get("priority", "")).strip(),
+            "automation": str(row.get("automation", "")).strip(),
+            "traceability_id": f"{run_name}::{str(row.get('id', '')).strip()}",
+        }
+        for row in detail.get("case_rows", [])
+        if str(row.get("id", "")).strip()
+    ]
+    return jsonify({"ok": True, "run_name": run_name, "cases": cases})
+
+
+@app.post("/api/runs/<run_name>/csv-save")
+def run_csv_save_api(run_name: str):
+    try:
+        run_dir = _resolve_run_dir(run_name)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    if not run_dir.exists():
+        return jsonify({"ok": False, "error": "Run not found."}), 404
+    csv_path = next(run_dir.glob("*.csv"), None)
+    if not csv_path:
+        return jsonify({"ok": False, "error": "Run CSV not found."}), 404
+
+    payload = request.get_json(silent=True) or {}
+    headers_raw = list(payload.get("headers", []) or [])
+    rows_raw = list(payload.get("rows", []) or [])
+    headers = [str(item or "").strip() for item in headers_raw if str(item or "").strip()]
+    if not headers:
+        return jsonify({"ok": False, "error": "CSV headers are empty."}), 400
+
+    unique_headers = []
+    seen = set()
+    for item in headers:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique_headers.append(item)
+    if "ID" not in unique_headers:
+        return jsonify({"ok": False, "error": "ID column is required."}), 400
+
+    normalized_rows = []
+    for row in rows_raw:
+        if not isinstance(row, dict):
+            continue
+        item = {key: str(row.get(key, "")) for key in unique_headers}
+        if not str(item.get("ID", "")).strip():
+            continue
+        normalized_rows.append(item)
+
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=unique_headers)
+        writer.writeheader()
+        writer.writerows(normalized_rows)
+
+    return jsonify({"ok": True, "run_name": run_name, "saved_rows": len(normalized_rows)})
+
+
+@app.get("/api/triage-inbox")
+def triage_inbox_api():
+    limit = int(request.args.get("limit", "12") or 12)
+    snapshot = build_triage_inbox(RESULT_DIR, limit=max(1, min(limit, 50)))
+    return jsonify({"ok": True, "triage": snapshot})
+
+
+@app.get("/api/ai-safety-audit")
+def ai_safety_audit_api():
+    limit = int(request.args.get("limit", "30") or 30)
+    snapshot = build_ai_safety_audit(RESULT_DIR, limit=max(1, min(limit, 100)))
+    return jsonify({"ok": True, "audit": snapshot})
+
+
+@app.get("/api/runs/<run_name>/recovery-history")
+def recovery_history_api(run_name: str):
+    try:
+        actions = _get_recovery_actions(run_name, limit=30)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except FileNotFoundError:
+        return jsonify({"ok": False, "error": "Run not found."}), 404
+    return jsonify({"ok": True, "run_name": run_name, "actions": actions})
+
+
+@app.get("/api/runs/<run_name>/recovery-summary")
+def recovery_summary_api(run_name: str):
+    try:
+        run_dir = _resolve_run_dir(run_name)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    if not run_dir.exists():
+        return jsonify({"ok": False, "error": "Run not found."}), 404
+    detail = build_run_detail(run_dir)
+    return jsonify(
+        {
+            "ok": True,
+            "run_name": run_name,
+            "summary": detail.get("recovery_summary", {}),
+            "effectiveness": detail.get("recovery_effectiveness", {}),
+        }
+    )
+
+
+@app.get("/api/runs/<run_name>/recovery-export")
+def recovery_export_api(run_name: str):
+    output_format = str(request.args.get("format", "json")).strip().lower()
+    limit = int(request.args.get("limit", "50") or 50)
+    try:
+        rows = _get_recovery_actions(run_name, limit=max(1, min(limit, 300)))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except FileNotFoundError:
+        return jsonify({"ok": False, "error": "Run not found."}), 404
+    if output_format == "csv":
+        buffer = io.StringIO()
+        fieldnames = ["timestamp", "action", "strategy", "status", "reason", "job_id", "target_run", "run_name"]
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        for item in rows:
+            writer.writerow(
+                {
+                    "timestamp": str(item.get("timestamp", "")),
+                    "action": str(item.get("action", "")),
+                    "strategy": str(item.get("strategy", "")),
+                    "status": str(item.get("status", "")),
+                    "reason": str(item.get("reason", "")),
+                    "job_id": str(item.get("job_id", "")),
+                    "target_run": str(item.get("target_run", "")),
+                    "run_name": run_name,
+                }
+            )
+        response = make_response(buffer.getvalue())
+        response.headers["Content-Type"] = "text/csv; charset=utf-8"
+        response.headers["Content-Disposition"] = f"attachment; filename={run_name}_recovery.csv"
+        return response
+    return jsonify({"ok": True, "run_name": run_name, "count": len(rows), "rows": rows})
+
+
+@app.get("/api/recovery-audit/export")
+def recovery_audit_export_api():
+    output_format = str(request.args.get("format", "json")).strip().lower()
+    rows = _collect_recovery_audit_rows(limit_per_run=60)
+    if output_format == "csv":
+        buffer = io.StringIO()
+        fieldnames = ["run_name", "timestamp", "action", "strategy", "status", "reason", "job_id", "target_run"]
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        for item in rows:
+            writer.writerow({key: item.get(key, "") for key in fieldnames})
+        response = make_response(buffer.getvalue())
+        response.headers["Content-Type"] = "text/csv; charset=utf-8"
+        response.headers["Content-Disposition"] = "attachment; filename=recovery_audit.csv"
+        return response
+    return jsonify({"ok": True, "count": len(rows), "rows": rows})
+
+
+@app.get("/api/recovery-metrics")
+def recovery_metrics_api():
+    metrics = _recovery_metrics_snapshot(limit_per_run=60)
+    return jsonify({"ok": True, "metrics": metrics})
+
+
+@app.get("/api/runs/<run_name>/safety")
+def run_safety_api(run_name: str):
+    try:
+        run_dir = _resolve_run_dir(run_name)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    if not run_dir.exists():
+        return jsonify({"ok": False, "error": "Run not found."}), 404
+    detail = build_run_detail(run_dir)
+    safe_rerun = _safe_rerun_eligibility(run_name)
+    retry_failed = _retry_failed_eligibility(detail)
+    if retry_failed["eligible"]:
+        recovery_strategy = "retry_failed"
+        recovery_reason = "There are failed cases and execution gate is not blocked."
+    elif safe_rerun["eligible"]:
+        recovery_strategy = "safe_rerun"
+        recovery_reason = "Retry-failed is not eligible; fallback to conservative safe rerun."
+    else:
+        recovery_strategy = "none"
+        recovery_reason = "No recovery strategy is currently eligible."
+    payload = {
+        "run_name": detail.get("run_name", run_name),
+        "safety_index": int(detail.get("safety_index", 0) or 0),
+        "safety_status": detail.get("safety_status", ""),
+        "safety_reasons": list(detail.get("safety_reasons", []) or []),
+        "safety_recommendations": list(detail.get("safety_recommendations", []) or []),
+        "safety_trend": list(detail.get("safety_trend", []) or []),
+        "execution_gate": detail.get("execution_gate", {}),
+        "replay_verification": detail.get("replay_verification", {}),
+        "drift_analysis": detail.get("drift_analysis", {}),
+        "policy_pack_report": detail.get("policy_pack_report", {}),
+        "safe_rerun": safe_rerun,
+        "retry_failed": retry_failed,
+        "recovery": {
+            "strategy": recovery_strategy,
+            "reason": recovery_reason,
+        },
+    }
+    return jsonify({"ok": True, "safety": payload})
 
 
 @app.get("/health")
@@ -634,7 +664,7 @@ def health():
     return jsonify({"ok": True, "time": time.time()})
 
 
-if __name__ == "__main__":
+def main() -> None:
     local_debug = os.getenv("QA_AGENT_DASHBOARD_DEBUG", "1").strip().lower() not in {"0", "false", "no"}
     app.run(
         host="127.0.0.1",
@@ -642,3 +672,7 @@ if __name__ == "__main__":
         debug=local_debug,
         use_reloader=local_debug,
     )
+
+
+if __name__ == "__main__":
+    main()

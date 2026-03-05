@@ -1,0 +1,8 @@
+Prioritize consistency of interaction and communication.
+
+Cover:
+- Label naming, action semantics, and visual hierarchy
+- Feedback timing, loading cues, and disabled states
+- Keyboard/touch interaction consistency
+- Readability of copy, helper text, and error explanation
+- Predictability across repeated actions and revisit flows

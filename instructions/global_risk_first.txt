@@ -1,0 +1,8 @@
+Prioritize highest-risk validation first, then expand coverage.
+
+Cover:
+- Flows with high business impact and high failure cost
+- Critical data mutation and irreversible actions
+- Permissions, boundary conditions, and failure branches
+- Existing known flaky areas and recent change surfaces
+- Stop at first blocker, then continue risk-ranked checks

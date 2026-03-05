@@ -1,0 +1,8 @@
+Run broad regression checks after code/config/content changes.
+
+Cover:
+- Previously stable core paths to detect regression
+- Data rendering, navigation continuity, and status updates
+- Cross-page consistency for labels, actions, and feedback
+- Browser responsiveness and interaction reliability
+- Compare current output vs expected baseline behavior

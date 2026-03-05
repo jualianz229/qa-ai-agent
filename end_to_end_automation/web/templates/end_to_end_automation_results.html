@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Automation Results | TracePilot{% endblock %}
+{% block header_kicker %}End-to-End Automation{% endblock %}
+{% block header_title %}Automation Results{% endblock %}
+{% block header_subtitle %}List of automation runs generated from test cases.{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Automation runs</p>
+      <h1>Automation Results</h1>
+    </div>
+    <div class="metric-inline">
+      <span>{{ metrics.automation_runs or 0 }} automation runs</span>
+      <span>{{ metrics.runs }} total runs</span>
+    </div>
+  </div>
+  <form class="filter-toolbar" action="{{ url_for('automation_results_page') }}" method="get">
+    <label class="filter-field">
+      <span>Sort runs</span>
+      <select name="sort" onchange="this.form.submit()">
+        <option value="latest" {% if (sort_mode or 'latest') == 'latest' %}selected{% endif %}>Latest</option>
+        <option value="safety_risk" {% if sort_mode == 'safety_risk' %}selected{% endif %}>Safety risk first</option>
+        <option value="failed_high" {% if sort_mode == 'failed_high' %}selected{% endif %}>Most failed first</option>
+      </select>
+    </label>
+  </form>
+  <div class="table-shell">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Run</th>
+          <th>Page Type</th>
+          <th>Cases</th>
+          <th>Passed</th>
+          <th>Failed</th>
+          <th>Videos</th>
+          <th>Confidence</th>
+          <th>Safety</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+          <tr>
+            <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.run_name) }}">{{ run.run_name }}</a></td>
+            <td>{{ run.page_type or "-" }}</td>
+            <td>{{ run.total_cases }}</td>
+            <td>{{ run.status_counts.passed or 0 }}</td>
+            <td>{{ run.status_counts.failed or 0 }}</td>
+            <td>{{ run.video_count }}</td>
+            <td><span class="confidence">{{ run.confidence_score }}</span></td>
+            <td>
+              <span class="badge {% if run.safety_status == 'critical' %}badge-failed{% elif run.safety_status == 'warning' %}badge-skipped{% else %}badge-passed{% endif %}">
+                {{ run.safety_index or 0 }}/100
+              </span>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="8">No automation results yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

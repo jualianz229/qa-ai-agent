@@ -1,0 +1,8 @@
+Prioritize perceived performance and runtime stability.
+
+Cover:
+- Page/interactions remain responsive under typical load
+- Repeated actions do not degrade responsiveness over time
+- Loading states are bounded, meaningful, and non-blocking
+- Heavy screens remain usable with graceful degradation
+- No obvious memory, rendering, or event-loop instability

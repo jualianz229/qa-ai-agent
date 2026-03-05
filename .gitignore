@@ -2,10 +2,8 @@
 .env
 __pycache__/
 *.py[cod]
-*$py.class
-.pytest_cache
-
-# Virtual environments
+*.class
+.pytest_cache/
 venv/
 env/
 .venv/
@@ -18,7 +16,20 @@ hasil/
 !README.md
 !instructions/
 
-# Auth/session files
+# Database & Logs
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+
+# Testing & Temp files
+tests/
+pytest_out.txt
+from pathlib import Path.py
+err.txt
+
+# Auth & Config
 auth/auth_state.json
 auth/session_state.json
 !auth/sample_auth_state.json
@@ -27,10 +38,12 @@ auth/session_state.json
 site_profiles/case_memory/
 site_profiles/learned/
 site_profiles/flaky/
+site_profiles/feedback/
+site_profiles/session.json
+visual_regression_testing/baselines/
 
 # OS/IDE metadata
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
-

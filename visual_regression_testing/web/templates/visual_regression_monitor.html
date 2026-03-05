@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}Diff Monitor | TracePilot{% endblock %}
+{% block header_kicker %}Visual Regression Testing{% endblock %}
+{% block header_title %}Diff Monitor{% endblock %}
+{% block header_subtitle %}Inspect changed areas, visual diff artifacts, and baseline approval status per run.{%
+endblock %}
+{% block content %}
+
+
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Diff explorer</p>
+      <h2>Inspect changed areas</h2>
+    </div>
+    <span class="panel-badge">Dev ID: {{ vrt_feature_id }}</span>
+  </div>
+  <div class="filter-toolbar">
+    <label class="filter-field">
+      <span>Select run</span>
+      <select id="vrt-diff-run-select">
+        <option value="">Select run</option>
+        {% for run in runs %}
+        <option value="{{ run.run_name }}" {% if selected_run_name and selected_run_name==run.run_name %}selected{%
+          endif %}>{{ run.run_name }} ({{ run.vrt_change_count or 0 }} changed)</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="mini-stats" id="vrt-diff-summary"></div>
+  <div class="insight-list" id="vrt-diff-list"></div>
+  <div class="artifact-groups" id="vrt-diff-visual-links"></div>
+  <div class="form-grid">
+    <div class="input-group input-group-full">
+      <label for="vrt-approval-note">Approval note</label>
+      <textarea id="vrt-approval-note" rows="3"
+        placeholder="Optional: reason for approving/rejecting this baseline."></textarea>
+    </div>
+  </div>
+  <div class="form-actions">
+    <div class="form-actions-buttons">
+      <button type="button" class="ghost-button" id="vrt-approval-approve">Approve as baseline</button>
+      <button type="button" class="ghost-button" id="vrt-approval-reject">Reject baseline</button>
+      <button type="button" class="ghost-button" id="vrt-approval-pending">Mark pending</button>
+    </div>
+    <p class="helper-text" id="vrt-approval-status" role="status" aria-live="polite"></p>
+  </div>
+</section>
+
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const select = document.getElementById("vrt-diff-run-select");
+    const summary = document.getElementById("vrt-diff-summary");
+    const list = document.getElementById("vrt-diff-list");
+    const visualLinks = document.getElementById("vrt-diff-visual-links");
+    const approvalNote = document.getElementById("vrt-approval-note");
+    const approvalStatus = document.getElementById("vrt-approval-status");
+    const approveBtn = document.getElementById("vrt-approval-approve");
+    const rejectBtn = document.getElementById("vrt-approval-reject");
+    const pendingBtn = document.getElementById("vrt-approval-pending");
+    let activeRunName = "";
+
+    function renderSummary(payload) {
+      const stats = payload.summary || {};
+      const approval = payload.visual_regression_approval || {};
+      summary.innerHTML = `
+        <div><dt>Baseline</dt><dd>${payload.baseline_run || "-"}</dd></div>
+        <div><dt>Total changed</dt><dd>${stats.total_changed || 0}</dd></div>
+        <div><dt>Text</dt><dd>${stats.text_change_count || 0}</dd></div>
+        <div><dt>Style</dt><dd>${stats.style_change_count || 0}</dd></div>
+        <div><dt>Layout</dt><dd>${stats.layout_change_count || 0}</dd></div>
+        <div><dt>Approval</dt><dd>${approval.status || "pending"}</dd></div>
+      `;
+    }
+
+    function renderAreas(areas) {
+      list.innerHTML = "";
+      if (!areas.length) {
+        list.innerHTML = '<p class="empty-state">No changed areas for this run.</p>';
+        return;
+      }
+      areas.slice(0, 20).forEach((item) => {
+        const article = document.createElement("article");
+        article.className = "insight-item";
+        article.innerHTML = `<strong>${item.area || item.tag || "area"}</strong><p>${item.changed_fields ? item.changed_fields.length + " property change(s)" : (item.change_type || "changed")}</p>`;
+        list.appendChild(article);
+      });
+    }
+
+    async function loadDiff(runName) {
+      activeRunName = runName;
+      summary.innerHTML = "";
+      list.innerHTML = "";
+      visualLinks.innerHTML = "";
+      approvalStatus.textContent = "";
+      if (!runName) return;
+      try {
+        const response = await fetch(`/api/runs/${encodeURIComponent(runName)}/visual-diff`);
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "Failed to load visual diff.");
+        }
+        renderSummary(payload.visual_diff);
+        renderAreas(payload.visual_diff.changed_areas || []);
+        const visual = payload.visual_diff.visual_regression || {};
+        const approval = payload.visual_diff.visual_regression_approval || {};
+        approvalNote.value = approval.note || "";
+        const links = [];
+        if (visual.current_artifact) links.push(`<a class="artifact-link" href="/artifacts/${encodeURIComponent(runName)}/${visual.current_artifact}">Current image</a>`);
+        if (visual.diff_artifact) links.push(`<a class="artifact-link" href="/artifacts/${encodeURIComponent(runName)}/${visual.diff_artifact}">Diff image</a>`);
+        const variantBadges = (visual.variants || []).map((item) => {
+          const ratio = Number((item.comparison || {}).ratio || 0) * 100;
+          const ignored = Number((item.comparison || {}).ignored_regions || item.ignore_region_count || 0);
+          return `<span class="panel-badge">${item.viewport_name || "viewport"}: ${item.status || "-"} (${ratio.toFixed(3)}%, ignore ${ignored})</span>`;
+        });
+        links.push(...variantBadges);
+        if (links.length) {
+          visualLinks.innerHTML = links.join("");
+        }
+      } catch (error) {
+        list.innerHTML = `<p class="empty-state">${error.message || "Failed to load visual diff."}</p>`;
+      }
+    }
+
+    async function submitApproval(statusValue) {
+      if (!activeRunName) {
+        approvalStatus.textContent = "Select a run first.";
+        return;
+      }
+      approvalStatus.textContent = "Saving approval...";
+      const body = new FormData();
+      body.append("status", statusValue);
+      body.append("note", approvalNote.value || "");
+      body.append("compare_run", "");
+      body.append("actor", "dashboard-vrt");
+      try {
+        const response = await fetch(`/api/runs/${encodeURIComponent(activeRunName)}/visual-baseline-approval`, { method: "POST", body });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "Failed to save approval.");
+        }
+        approvalStatus.textContent = `Baseline ${payload.approval.status} saved.`;
+        await loadDiff(activeRunName);
+      } catch (error) {
+        approvalStatus.textContent = error.message || "Failed to save approval.";
+      }
+    }
+
+    select?.addEventListener("change", () => loadDiff(select.value));
+    approveBtn?.addEventListener("click", () => submitApproval("approved"));
+    rejectBtn?.addEventListener("click", () => submitApproval("rejected"));
+    pendingBtn?.addEventListener("click", () => submitApproval("pending"));
+    if (select?.value) {
+      loadDiff(select.value);
+    }
+  });
+</script>
+{% endblock %}

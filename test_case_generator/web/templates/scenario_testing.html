@@ -1,0 +1,399 @@
+{% extends "base.html" %}
+{% block title %}Test Case Generator | TracePilot{% endblock %}
+{% block header_kicker %}Testing Flow{% endblock %}
+{% block header_title %}Test Case Generator{% endblock %}
+{% block header_subtitle %}Step 1: input a URL to generate as many context-grounded test cases as possible.{% endblock
+%}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Test Case Builder</p>
+      <h2>Generate Test Cases</h2>
+    </div>
+    <span class="panel-badge">Step 1</span>
+  </div>
+  <form id="scenario-form" class="form-stack">
+    <div class="input-group input-group-full">
+      <label for="scenario-url">Target URL</label>
+      <input id="scenario-url" type="text" name="url" placeholder="https://example.com" required>
+      <p class="field-inline-note" id="scenario-url-hint">* Use a full URL (example: https://example.com).</p>
+    </div>
+    <div class="form-grid">
+      <div class="input-group balanced-card">
+        <label for="scenario-crawl-limit">Mini crawl</label>
+        <select id="scenario-crawl-limit" name="crawl_limit">
+          <option value="1">1 page</option>
+          <option value="3" selected>3 pages</option>
+          <option value="5">5 pages</option>
+        </select>
+        <div class="nested-setting">
+          <label for="scenario-recrawl">Adaptive recrawl</label>
+          <select id="scenario-recrawl" name="adaptive_recrawl">
+            <option value="yes" selected>Yes</option>
+            <option value="no">No</option>
+          </select>
+        </div>
+        <div class="form-actions form-actions-inline">
+          <div class="form-actions-buttons">
+            <button class="primary-button" type="submit">Generate Test Cases</button>
+          </div>
+        </div>
+        <p class="helper-text" id="scenario-status" role="status" aria-live="polite"></p>
+      </div>
+      <div class="input-group template-slot-stable balanced-card">
+        <label for="scenario-template">Instruction template</label>
+        <select id="scenario-template" name="template_name">
+          <option value="">No template</option>
+          {% for template in templates %}
+          <option value="{{ template.name }}">{{ template.stem.replace("_", " ").title() }}</option>
+          {% endfor %}
+        </select>
+        <div id="scenario-template-editor-group" class="template-inline-editor" hidden>
+          <label for="scenario-template-content">Template content (editable)</label>
+          <textarea class="template-editor" id="scenario-template-content" name="template_content" rows="8"
+            placeholder="Template content will appear here when a template is selected." disabled></textarea>
+          <p class="helper-text template-note">* Any edits here will be saved automatically when you generate scenario.
+          </p>
+        </div>
+        <div id="scenario-custom-template-group" class="template-inline-editor">
+          <label for="scenario-custom-template">Custom Template</label>
+          <textarea class="template-editor" id="scenario-custom-template" name="custom_template" rows="8"
+            placeholder="Leave blank if not needed. Fill this to add custom instruction for this scenario run."></textarea>
+          <p class="helper-text template-note">* Any edits here will be saved automatically when you generate scenario.
+          </p>
+        </div>
+      </div>
+    </div>
+  </form>
+</section>
+
+<section class="panel hidden-panel" id="scenario-inline-queue">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Live jobs</p>
+      <h2>Execution queue</h2>
+    </div>
+    <button id="scenario-refresh-queue" class="ghost-button" type="button">Refresh queue</button>
+  </div>
+  <div id="scenario-inline-jobs" class="job-list">
+    <p class="empty-state">No active jobs yet.</p>
+  </div>
+</section>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const form = document.getElementById("scenario-form");
+    const status = document.getElementById("scenario-status");
+    const templateSelect = document.getElementById("scenario-template");
+    const templateEditorGroup = document.getElementById("scenario-template-editor-group");
+    const customTemplateGroup = document.getElementById("scenario-custom-template-group");
+    const templateEditor = document.getElementById("scenario-template-content");
+    const customTemplate = document.getElementById("scenario-custom-template");
+    const scenarioUrl = document.getElementById("scenario-url");
+    const urlHint = document.getElementById("scenario-url-hint");
+    const inlineQueuePanel = document.getElementById("scenario-inline-queue");
+    const inlineJobs = document.getElementById("scenario-inline-jobs");
+    const refreshQueueButton = document.getElementById("scenario-refresh-queue");
+    const submitButton = form?.querySelector('button[type="submit"]');
+    let isSubmitting = false;
+    let currentScenarioJobId = "";
+    let inlineQueueTimer = 0;
+    const draftStorageKey = "tracepilot.scenario.templateDraft.v2";
+
+    function formatDurationSeconds(createdAtIso, updatedAtIso) {
+      const createdAt = Date.parse(String(createdAtIso || ""));
+      const updatedAt = Date.parse(String(updatedAtIso || "")) || Date.now();
+      if (!Number.isFinite(createdAt)) return "-";
+      const seconds = Math.max(0, Math.round((updatedAt - createdAt) / 1000));
+      return `${seconds}s`;
+    }
+
+    function validateUrlInput(raw) {
+      const value = String(raw || "").trim();
+      if (!value) {
+        return { valid: false, message: "URL is required." };
+      }
+      const normalized = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+      try {
+        const parsed = new URL(normalized);
+        if (!parsed.hostname) {
+          return { valid: false, message: "URL host is missing." };
+        }
+        return { valid: true, message: `* Normalized to ${parsed.toString()}` };
+      } catch (_error) {
+        return { valid: false, message: "Invalid URL format." };
+      }
+    }
+
+    function updateUrlValidationUi() {
+      const result = validateUrlInput(scenarioUrl?.value || "");
+      if (urlHint) {
+        urlHint.textContent = result.valid ? result.message : result.message;
+        urlHint.classList.toggle("is-error", !result.valid && !!(scenarioUrl?.value || "").trim());
+      }
+      if (submitButton) {
+        const hasRunningState = submitButton.classList.contains("is-loading");
+        submitButton.disabled = !result.valid || isSubmitting || hasRunningState;
+      }
+      return result.valid;
+    }
+
+    function saveTemplateDraft() {
+      try {
+        const payload = {
+          template_name: templateSelect?.value || "",
+          template_content: templateEditor?.value || "",
+          custom_template: customTemplate?.value || "",
+        };
+        window.localStorage.setItem(draftStorageKey, JSON.stringify(payload));
+      } catch (_error) {
+      }
+    }
+
+    function loadTemplateDraft() {
+      try {
+        const raw = window.localStorage.getItem(draftStorageKey);
+        if (!raw) return null;
+        const payload = JSON.parse(raw);
+        if (customTemplate && payload?.custom_template && !customTemplate.value) {
+          customTemplate.value = String(payload.custom_template);
+        }
+        return payload;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function sourceLabelFromMode(modeValue) {
+      const mode = String(modeValue || "").toLowerCase();
+      if (mode === "vrt_scan") return "VRT Scan";
+      if (mode === "automation_test") return "Automation";
+      if (mode === "retry_failed") return "Retry Failed";
+      if (mode === "safe_rerun") return "Safe Rerun";
+      return "Scenario";
+    }
+
+    function renderInlineJobs(jobs) {
+      if (!inlineJobs) return;
+      if (!Array.isArray(jobs) || !jobs.length) {
+        inlineJobs.innerHTML = '<p class="empty-state">No active jobs yet.</p>';
+        return;
+      }
+      inlineJobs.innerHTML = "";
+      jobs.slice(0, 8).forEach((job) => {
+        const logLines = Array.isArray(job.log_lines) ? job.log_lines : [];
+        const isLogCollapsed = logLines.length > 40;
+        const fullLog = logLines.join("\n");
+        const previewLog = isLogCollapsed ? logLines.slice(0, 40).join("\n") : fullLog;
+        const isEmptyLog = !previewLog;
+        const logText = previewLog || "Waiting for log output... Click Refresh queue.";
+        const runName = String(job.run_name || "").trim();
+        const sourceLabel = sourceLabelFromMode(job?.payload?.mode);
+        const durationLabel = formatDurationSeconds(job?.created_at, job?.updated_at);
+        const statusValue = String(job.status || "").toLowerCase();
+        const lastErrorLine = statusValue === "failed"
+          ? [...logLines].reverse().find((line) => /error|failed|traceback/i.test(String(line || "")))
+          : "";
+        const card = document.createElement("article");
+        card.className = `job-card job-${String(job.status || "")}`;
+        card.innerHTML = `
+          <header><strong>${String(job.payload?.url || "-")}</strong><span>${String(job.status || "-")}</span></header>
+          <div class="job-meta">
+            <span class="panel-badge">Source: ${sourceLabel}</span>
+            <span class="panel-badge">Started: ${String(job.created_at || "-")}</span>
+            <span class="panel-badge">Duration: ${durationLabel}</span>
+          </div>
+          <div class="job-command-viewer mono">${(job.command || []).join(" ")}</div>
+          <div class="job-actions">
+            ${runName ? `<a class="inline-link" href="/runs/${encodeURIComponent(runName)}">Open run ${runName}</a>` : ""}
+            ${runName ? `<button class="inline-mini-button" type="button" data-copy-run-link="/runs/${encodeURIComponent(runName)}">Copy run link</button>` : ""}
+            ${isLogCollapsed ? `<button class="inline-mini-button" type="button" data-log-toggle>Show more</button>` : ""}
+          </div>
+          ${lastErrorLine ? `<p class="job-error-summary">${String(lastErrorLine)}</p>` : ""}
+          <pre class="job-log-viewer ${isLogCollapsed ? "is-collapsed" : ""} ${isEmptyLog ? "is-empty" : ""}">${logText}</pre>
+        `;
+        const logView = card.querySelector(".job-log-viewer");
+        if (logView) {
+          logView.dataset.previewLog = previewLog || "Waiting for log output...";
+          logView.dataset.fullLog = fullLog || "Waiting for log output...";
+        }
+        inlineJobs.appendChild(card);
+      });
+      inlineJobs.querySelectorAll("[data-copy-run-link]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const path = button.getAttribute("data-copy-run-link");
+          if (!path) return;
+          const text = `${window.location.origin}${path}`;
+          try {
+            await navigator.clipboard.writeText(text);
+            button.textContent = "Copied";
+            window.setTimeout(() => {
+              button.textContent = "Copy run link";
+            }, 900);
+          } catch (_error) {
+          }
+        });
+      });
+      inlineJobs.querySelectorAll("[data-log-toggle]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const card = button.closest(".job-card");
+          const pre = card?.querySelector(".job-log-viewer");
+          if (!pre) return;
+          const collapsed = pre.classList.toggle("is-collapsed");
+          button.textContent = collapsed ? "Show more" : "Show less";
+          pre.textContent = collapsed ? (pre.dataset.previewLog || "") : (pre.dataset.fullLog || "");
+        });
+      });
+    }
+
+    async function refreshInlineQueue() {
+      if (!inlineJobs) return;
+      try {
+        const response = await fetch("/api/jobs");
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Failed to load queue.");
+        }
+        const allJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+        const activeJobs = allJobs.filter((job) => {
+          const state = String(job?.status || "").toLowerCase();
+          return state === "queued" || state === "running";
+        });
+        const currentJob = currentScenarioJobId ? allJobs.find((job) => String(job?.id || "") === currentScenarioJobId) : null;
+        const visibleJobs = currentJob && !activeJobs.find((job) => String(job?.id || "") === String(currentJob.id || ""))
+          ? [currentJob, ...activeJobs]
+          : activeJobs;
+        renderInlineJobs(visibleJobs);
+
+        const currentState = String(currentJob?.status || "").toLowerCase();
+        const stillRunning = currentState === "queued" || currentState === "running";
+        if (submitButton) {
+          submitButton.disabled = stillRunning || isSubmitting || !validateUrlInput(scenarioUrl?.value || "").valid;
+          submitButton.classList.toggle("is-loading", stillRunning || isSubmitting);
+          submitButton.textContent = stillRunning || isSubmitting ? "Running" : "Generate Test Cases";
+        }
+        if (!stillRunning && currentScenarioJobId) {
+          window.clearInterval(inlineQueueTimer);
+          inlineQueueTimer = 0;
+          status.textContent = currentState === "failed" ? "Test case run failed. Check queue log." : "Test case run finished.";
+        }
+      } catch (error) {
+        inlineJobs.innerHTML = `<p class="empty-state">${error.message || "Failed to load queue."}</p>`;
+      }
+    }
+
+    function startInlineQueuePolling() {
+      if (inlineQueueTimer) return;
+      inlineQueueTimer = window.setInterval(() => {
+        refreshInlineQueue();
+      }, 2500);
+    }
+
+    const loadTemplateContent = async (templateName) => {
+      if (!templateName) {
+        if (templateEditorGroup) templateEditorGroup.hidden = true;
+        if (customTemplateGroup) customTemplateGroup.hidden = false;
+        if (templateEditor) templateEditor.value = "";
+        if (templateEditor) templateEditor.disabled = true;
+        if (customTemplate) customTemplate.disabled = false;
+        return;
+      }
+      if (templateEditorGroup) templateEditorGroup.hidden = false;
+      if (customTemplateGroup) customTemplateGroup.hidden = true;
+      if (templateEditor) templateEditor.disabled = false;
+      if (customTemplate) {
+        customTemplate.value = "";
+        customTemplate.disabled = true;
+      }
+      if (templateEditor) templateEditor.value = "Loading template...";
+      try {
+        const response = await fetch(`/api/templates/${encodeURIComponent(templateName)}`);
+        const payload = await response.json();
+        if (!response.ok || !payload.template) {
+          throw new Error(payload.error || "Failed to load template.");
+        }
+        if (templateEditor) templateEditor.value = payload.template.content || "";
+      } catch (error) {
+        if (templateEditor) templateEditor.value = "";
+        if (templateEditor) templateEditor.disabled = true;
+        if (templateEditorGroup) templateEditorGroup.hidden = true;
+        if (customTemplateGroup) customTemplateGroup.hidden = false;
+        if (customTemplate) customTemplate.disabled = false;
+        status.textContent = error.message || "Failed to load template.";
+      }
+    };
+
+    templateSelect?.addEventListener("change", () => {
+      loadTemplateContent(templateSelect.value || "");
+      saveTemplateDraft();
+    });
+    scenarioUrl?.addEventListener("input", updateUrlValidationUi);
+    templateEditor?.addEventListener("input", saveTemplateDraft);
+    customTemplate?.addEventListener("input", saveTemplateDraft);
+
+    const restoredTemplateDraft = loadTemplateDraft();
+    (async () => {
+      if (templateSelect) {
+        templateSelect.value = "";
+      }
+      await loadTemplateContent("");
+      if (restoredTemplateDraft && customTemplate && restoredTemplateDraft.custom_template) {
+        customTemplate.value = String(restoredTemplateDraft.custom_template);
+      }
+      saveTemplateDraft();
+    })();
+    updateUrlValidationUi();
+
+    form?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!updateUrlValidationUi()) {
+        status.textContent = "Fix URL format first.";
+        return;
+      }
+      if (isSubmitting) return;
+      isSubmitting = true;
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.classList.add("is-loading");
+        submitButton.textContent = "Running";
+      }
+      status.textContent = "Submitting test case job...";
+      const data = new FormData(form);
+      try {
+        const response = await fetch("/api/scenario-jobs", { method: "POST", body: data });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "Failed to generate test case.");
+        }
+        currentScenarioJobId = String(payload?.job?.id || "");
+        try {
+          window.localStorage.removeItem(draftStorageKey);
+        } catch (_error) {
+        }
+        status.textContent = "Test case job is running...";
+        if (inlineQueuePanel) {
+          inlineQueuePanel.classList.remove("hidden-panel");
+          inlineQueuePanel.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        refreshInlineQueue();
+        startInlineQueuePolling();
+      } catch (error) {
+        status.textContent = error.message || "Failed to generate test case.";
+      } finally {
+        isSubmitting = false;
+        updateUrlValidationUi();
+      }
+    });
+
+    refreshQueueButton?.addEventListener("click", () => {
+      refreshInlineQueue();
+    });
+
+    window.addEventListener("beforeunload", () => {
+      if (inlineQueueTimer) {
+        window.clearInterval(inlineQueueTimer);
+      }
+    });
+  });
+</script>
+{% endblock %}

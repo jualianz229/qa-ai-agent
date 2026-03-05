@@ -1,0 +1,545 @@
+{% extends "base.html" %}
+{% block title %}End-to-End Automation | TracePilot{% endblock %}
+{% block header_kicker %}Testing Flow{% endblock %}
+{% block header_title %}End-to-End Automation{% endblock %}
+{% block header_subtitle %}Step 2: run existing test cases as automation runs for execution and review.{% endblock
+%}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Automation execution</p>
+      <h2>Generate End-to-End Automation</h2>
+    </div>
+    <span class="panel-badge">Step 2</span>
+  </div>
+  <form id="automation-form" class="form-stack">
+    <input id="automation-inject-login-value" type="hidden" name="inject_login" value="">
+    <div class="input-group input-group-full">
+      <label for="automation-source-run">Test case source</label>
+      <select id="automation-source-run" name="source_run_name" required>
+        <option value="">Select test case run</option>
+        {% for run in runs %}
+        <option value="{{ run.run_name }}" {% if source_run_name and source_run_name==run.run_name %}selected{% endif
+          %}>{{ run.run_name }} ({{ run.total_cases }} cases)</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-grid">
+      <div class="input-group template-slot-stable balanced-card">
+        <label for="automation-case-mode">Case mode</label>
+        <select id="automation-case-mode" name="case_mode">
+          <option value="all" selected>All test cases</option>
+          <option value="failed">Failed only</option>
+          <option value="selected">Selected from list</option>
+          <option value="custom">Custom IDs</option>
+        </select>
+        <p class="field-inline-note" id="automation-estimate-note">* Estimated cases to run: -</p>
+        <div class="nested-setting">
+          <label for="automation-headed">Headed browser</label>
+          <select id="automation-headed" name="executor_headed">
+            <option value="no" selected>No</option>
+            <option value="yes">Yes</option>
+          </select>
+        </div>
+        <div class="form-actions form-actions-inline">
+          <div class="form-actions-buttons">
+            <button class="primary-button" type="submit">Generate End-to-End Automation</button>
+          </div>
+        </div>
+      </div>
+      <div class="input-group template-slot-stable balanced-card">
+        <label for="automation-login-template">Inject Login</label>
+        <select id="automation-login-template" name="inject_login_template">
+          <option value="">No login injection</option>
+          <option value="standard_login">Standard username + password</option>
+          <option value="email_password_login">Email + password</option>
+          <option value="sso_redirect_login">SSO / redirect login</option>
+          <option value="otp_login">OTP / MFA login</option>
+          <option value="session_bootstrap">Token / cookie bootstrap</option>
+        </select>
+        <div id="automation-login-editor-group" class="template-inline-editor" hidden>
+          <label for="automation-login-template-content">Inject Login content (editable)</label>
+          <textarea class="template-editor" id="automation-login-template-content" rows="8"
+            placeholder="Login injection content will appear here when a template is selected." disabled></textarea>
+          <p class="helper-text template-note">* Any edits here will be saved automatically when you generate
+            automation.</p>
+        </div>
+        <div id="automation-login-custom-group" class="template-inline-editor">
+          <label for="automation-login-custom">Custom Inject Login</label>
+          <textarea class="template-editor" id="automation-login-custom" rows="8"
+            placeholder="Examples: use standard_user / secret_sauce, fill email + password, click Microsoft SSO, complete OTP, or preload auth token/cookie."></textarea>
+          <p class="helper-text template-note">* Any edits here will be saved automatically when you generate
+            automation.</p>
+        </div>
+      </div>
+    </div>
+    <div class="input-group input-group-full hidden-panel" id="automation-case-ids-wrap">
+      <label for="automation-case-ids">Case IDs (comma / new line)</label>
+      <textarea id="automation-case-ids" name="case_ids" rows="4" placeholder="TC-001, TC-002"></textarea>
+    </div>
+    <div class="input-group input-group-full hidden-panel" id="automation-case-table-wrap">
+      <label>Scenario cases</label>
+      <div class="table-shell">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Select</th>
+              <th>ID</th>
+              <th>Title</th>
+              <th>Status</th>
+              <th>Priority</th>
+              <th>Traceability</th>
+            </tr>
+          </thead>
+          <tbody id="automation-case-table-body">
+            <tr>
+              <td colspan="6">Select a source run to load scenario cases.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="artifact-groups" id="automation-case-preview"></div>
+    <div class="form-actions">
+      <p class="helper-text" id="automation-status" role="status" aria-live="polite"></p>
+    </div>
+  </form>
+</section>
+
+<section class="panel hidden-panel" id="automation-inline-queue">
+  <div class="panel-head">
+    <div>
+      <p class="eyebrow">Live jobs</p>
+      <h2>Execution queue</h2>
+    </div>
+    <button id="automation-refresh-queue" class="ghost-button" type="button">Refresh queue</button>
+  </div>
+  <div id="automation-inline-jobs" class="job-list">
+    <p class="empty-state">No active jobs yet.</p>
+  </div>
+</section>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const form = document.getElementById("automation-form");
+    const sourceRun = document.getElementById("automation-source-run");
+    const caseMode = document.getElementById("automation-case-mode");
+    const caseIdsWrap = document.getElementById("automation-case-ids-wrap");
+    const caseTableWrap = document.getElementById("automation-case-table-wrap");
+    const caseTableBody = document.getElementById("automation-case-table-body");
+    const caseIdsTextarea = document.getElementById("automation-case-ids");
+    const casePreview = document.getElementById("automation-case-preview");
+    const injectLoginValue = document.getElementById("automation-inject-login-value");
+    const loginTemplateSelect = document.getElementById("automation-login-template");
+    const loginEditorGroup = document.getElementById("automation-login-editor-group");
+    const loginCustomGroup = document.getElementById("automation-login-custom-group");
+    const loginTemplateEditor = document.getElementById("automation-login-template-content");
+    const loginCustomEditor = document.getElementById("automation-login-custom");
+    const status = document.getElementById("automation-status");
+    const inlineQueuePanel = document.getElementById("automation-inline-queue");
+    const inlineJobs = document.getElementById("automation-inline-jobs");
+    const refreshQueueButton = document.getElementById("automation-refresh-queue");
+    const submitButton = form?.querySelector('button[type="submit"]');
+    const estimateNote = document.getElementById("automation-estimate-note");
+    let isSubmitting = false;
+    let currentAutomationJobId = "";
+    let inlineQueueTimer = 0;
+    const loginDraftStorageKey = "tracepilot.automation.injectLoginDraft.v1";
+    let currentCaseRows = [];
+    const loginTemplates = {
+      standard_login: `Use a standard username/password login before executing the selected test cases.
+
+Example:
+- Open the target URL or login page first
+- Fill username field with a valid account
+- Fill password field with a valid password
+- Click the main Login / Sign In button
+- Wait until the post-login landing page or dashboard is visible`,
+      email_password_login: `Use an email + password login flow before executing the selected test cases.
+
+Example:
+- Fill email input with a valid email account
+- Fill password input with the matching password
+- Submit the login form
+- Wait until the authenticated page is loaded
+- Reuse the active session for the remaining test steps`,
+      sso_redirect_login: `Use SSO / redirect login before executing the selected test cases.
+
+Example:
+- Click the SSO provider button such as Google or Microsoft
+- Complete the external sign-in flow
+- Return to the application callback URL
+- Wait until the authenticated home page is ready
+- Continue the remaining test steps in the same session`,
+      otp_login: `Use OTP / MFA login before executing the selected test cases.
+
+Example:
+- Complete username/password login first
+- Wait for the OTP or MFA challenge page
+- Enter the OTP code or approval step
+- Confirm the verification action
+- Continue only after the authenticated page is visible`,
+      session_bootstrap: `Bootstrap an authenticated session before executing the selected test cases.
+
+Example:
+- Preload auth state, token, or session cookie
+- Open the protected page directly
+- Verify the user is already authenticated
+- Skip manual login form interaction
+- Continue the selected automation cases with the active session`,
+    };
+
+    function renderInlineJobs(jobs) {
+      if (!inlineJobs) return;
+      if (!Array.isArray(jobs) || !jobs.length) {
+        inlineJobs.innerHTML = '<p class="empty-state">No active jobs yet.</p>';
+        return;
+      }
+      inlineJobs.innerHTML = "";
+      jobs.slice(0, 8).forEach((job) => {
+        const logLines = Array.isArray(job.log_lines) ? job.log_lines : [];
+        const isLogCollapsed = logLines.length > 40;
+        const fullLog = logLines.join("\n");
+        const previewLog = isLogCollapsed ? logLines.slice(0, 40).join("\n") : fullLog;
+        const isEmptyLog = !previewLog;
+        const logText = previewLog || "Waiting for log output... Click Refresh queue.";
+        const runName = String(job.run_name || "").trim();
+        const statusValue = String(job.status || "").toLowerCase();
+        const mode = String(job?.payload?.mode || "").toLowerCase();
+        const sourceLabel = mode === "automation_test" ? "Automation" : mode === "vrt_scan" ? "VRT Scan" : "Scenario";
+        const createdAt = String(job.created_at || "-");
+        const createdMs = Date.parse(createdAt);
+        const updatedMs = Date.parse(String(job.updated_at || "")) || Date.now();
+        const duration = Number.isFinite(createdMs) ? `${Math.max(0, Math.round((updatedMs - createdMs) / 1000))}s` : "-";
+        const lastErrorLine = statusValue === "failed"
+          ? [...logLines].reverse().find((line) => /error|failed|traceback/i.test(String(line || "")))
+          : "";
+        const card = document.createElement("article");
+        card.className = `job-card job-${String(job.status || "")}`;
+        card.innerHTML = `
+          <header><strong>${String(job.payload?.url || "-")}</strong><span>${String(job.status || "-")}</span></header>
+          <div class="job-meta">
+            <span class="panel-badge">Source: ${sourceLabel}</span>
+            <span class="panel-badge">Started: ${createdAt}</span>
+            <span class="panel-badge">Duration: ${duration}</span>
+          </div>
+          <div class="job-command-viewer mono">${(job.command || []).join(" ")}</div>
+          <div class="job-actions">
+            ${runName ? `<a class="inline-link" href="/runs/${encodeURIComponent(runName)}">Open run ${runName}</a>` : ""}
+            ${runName ? `<button class="inline-mini-button" type="button" data-copy-run-link="/runs/${encodeURIComponent(runName)}">Copy run link</button>` : ""}
+            ${isLogCollapsed ? `<button class="inline-mini-button" type="button" data-log-toggle>Show more</button>` : ""}
+          </div>
+          ${lastErrorLine ? `<p class="job-error-summary">${String(lastErrorLine)}</p>` : ""}
+          <pre class="job-log-viewer ${isLogCollapsed ? "is-collapsed" : ""} ${isEmptyLog ? "is-empty" : ""}">${logText}</pre>
+        `;
+        const logView = card.querySelector(".job-log-viewer");
+        if (logView) {
+          logView.dataset.previewLog = previewLog || "Waiting for log output...";
+          logView.dataset.fullLog = fullLog || "Waiting for log output...";
+        }
+        inlineJobs.appendChild(card);
+      });
+      inlineJobs.querySelectorAll("[data-copy-run-link]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const path = button.getAttribute("data-copy-run-link");
+          if (!path) return;
+          try {
+            await navigator.clipboard.writeText(`${window.location.origin}${path}`);
+            button.textContent = "Copied";
+            window.setTimeout(() => {
+              button.textContent = "Copy run link";
+            }, 900);
+          } catch (_error) {
+          }
+        });
+      });
+      inlineJobs.querySelectorAll("[data-log-toggle]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const card = button.closest(".job-card");
+          const pre = card?.querySelector(".job-log-viewer");
+          if (!pre) return;
+          const collapsed = pre.classList.toggle("is-collapsed");
+          pre.textContent = collapsed ? (pre.dataset.previewLog || "") : (pre.dataset.fullLog || "");
+          button.textContent = collapsed ? "Show more" : "Show less";
+        });
+      });
+    }
+
+    async function refreshInlineQueue() {
+      if (!inlineJobs) return;
+      try {
+        const response = await fetch("/api/jobs");
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Failed to load queue.");
+        }
+        const allJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+        const activeJobs = allJobs.filter((job) => {
+          const state = String(job?.status || "").toLowerCase();
+          return state === "queued" || state === "running";
+        });
+        const currentJob = currentAutomationJobId ? allJobs.find((job) => String(job?.id || "") === currentAutomationJobId) : null;
+        const visibleJobs = currentJob && !activeJobs.find((job) => String(job?.id || "") === String(currentJob.id || ""))
+          ? [currentJob, ...activeJobs]
+          : activeJobs;
+        renderInlineJobs(visibleJobs);
+
+        const currentState = String(currentJob?.status || "").toLowerCase();
+        const stillRunning = currentState === "queued" || currentState === "running";
+        if (submitButton) {
+          submitButton.disabled = stillRunning || isSubmitting;
+          submitButton.classList.toggle("is-loading", stillRunning || isSubmitting);
+          submitButton.textContent = stillRunning || isSubmitting ? "Running" : "Generate End-to-End Automation";
+        }
+        if (!stillRunning && currentAutomationJobId) {
+          window.clearInterval(inlineQueueTimer);
+          inlineQueueTimer = 0;
+          status.textContent = currentState === "failed" ? "Automation run failed. Check queue log." : "Automation run finished.";
+        }
+      } catch (error) {
+        inlineJobs.innerHTML = `<p class="empty-state">${error.message || "Failed to load queue."}</p>`;
+      }
+    }
+
+    function startInlineQueuePolling() {
+      if (inlineQueueTimer) return;
+      inlineQueueTimer = window.setInterval(() => {
+        refreshInlineQueue();
+      }, 2500);
+    }
+
+    function syncInjectLoginValue() {
+      if (!injectLoginValue) return;
+      const templateName = loginTemplateSelect?.value || "";
+      if (templateName) {
+        injectLoginValue.value = loginTemplateEditor?.value || "";
+        return;
+      }
+      injectLoginValue.value = loginCustomEditor?.value || "";
+    }
+
+    function saveLoginDraft() {
+      try {
+        const payload = {
+          template: loginTemplateSelect?.value || "",
+          template_content: loginTemplateEditor?.value || "",
+          custom_content: loginCustomEditor?.value || "",
+        };
+        window.localStorage.setItem(loginDraftStorageKey, JSON.stringify(payload));
+      } catch (_error) {
+      }
+    }
+
+    function restoreLoginDraft() {
+      try {
+        const raw = window.localStorage.getItem(loginDraftStorageKey);
+        if (!raw) return null;
+        const payload = JSON.parse(raw);
+        if (loginTemplateSelect && payload?.template && !loginTemplateSelect.value) {
+          loginTemplateSelect.value = String(payload.template);
+        }
+        if (loginTemplateEditor && payload?.template_content && !loginTemplateEditor.value) {
+          loginTemplateEditor.value = String(payload.template_content);
+        }
+        if (loginCustomEditor && payload?.custom_content && !loginCustomEditor.value) {
+          loginCustomEditor.value = String(payload.custom_content);
+        }
+        return payload;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function loadInjectLoginTemplate(templateName) {
+      if (!templateName) {
+        if (loginEditorGroup) loginEditorGroup.hidden = true;
+        if (loginCustomGroup) loginCustomGroup.hidden = false;
+        if (loginTemplateEditor) {
+          loginTemplateEditor.value = "";
+          loginTemplateEditor.disabled = true;
+        }
+        if (loginCustomEditor) loginCustomEditor.disabled = false;
+        syncInjectLoginValue();
+        saveLoginDraft();
+        return;
+      }
+      if (loginEditorGroup) loginEditorGroup.hidden = false;
+      if (loginCustomGroup) loginCustomGroup.hidden = true;
+      if (loginTemplateEditor) {
+        loginTemplateEditor.disabled = false;
+        loginTemplateEditor.value = loginTemplates[templateName] || "";
+      }
+      if (loginCustomEditor) {
+        loginCustomEditor.value = "";
+        loginCustomEditor.disabled = true;
+      }
+      syncInjectLoginValue();
+      saveLoginDraft();
+    }
+
+    function updateEstimatedCaseCount() {
+      const mode = String(caseMode?.value || "all").toLowerCase();
+      let count = 0;
+      if (mode === "all") {
+        count = currentCaseRows.length;
+      } else if (mode === "failed") {
+        count = currentCaseRows.filter((row) => String(row?.status || "").toLowerCase() === "failed").length;
+      } else if (mode === "selected") {
+        count = document.querySelectorAll(".automation-case-check:checked").length;
+      } else if (mode === "custom") {
+        const ids = String(caseIdsTextarea?.value || "").replace(/\n/g, ",").split(",").map((item) => item.trim()).filter(Boolean);
+        count = ids.length;
+      }
+      if (estimateNote) {
+        estimateNote.textContent = `* Estimated cases to run: ${count || 0}`;
+      }
+    }
+
+    async function refreshCasePreview() {
+      const runName = sourceRun.value;
+      casePreview.innerHTML = "";
+      caseTableBody.innerHTML = '<tr><td colspan="6">Loading...</td></tr>';
+      currentCaseRows = [];
+      updateEstimatedCaseCount();
+      if (!runName) return;
+      try {
+        const response = await fetch(`/api/runs/${encodeURIComponent(runName)}/cases`);
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "Failed to read case list.");
+        }
+        const rows = (payload.cases || []);
+        if (!rows.length) {
+          casePreview.innerHTML = '<span class="panel-badge">No case</span>';
+          caseTableBody.innerHTML = '<tr><td colspan="6">No case found.</td></tr>';
+          currentCaseRows = [];
+          updateEstimatedCaseCount();
+          return;
+        }
+        currentCaseRows = rows.slice();
+        rows.slice(0, 14).forEach((item) => {
+          const badge = document.createElement("span");
+          badge.className = "panel-badge";
+          badge.textContent = `${item.id} - ${item.status || "unknown"}`;
+          casePreview.appendChild(badge);
+        });
+        caseTableBody.innerHTML = "";
+        rows.forEach((item) => {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td><input type="checkbox" class="automation-case-check" value="${item.id || ""}" name="selected_case_ids[]"></td>
+            <td>${item.id || "-"}</td>
+            <td>${item.title || "-"}</td>
+            <td>${item.status || "-"}</td>
+            <td>${item.priority || "-"}</td>
+            <td>${item.traceability_id || "-"}</td>
+          `;
+          caseTableBody.appendChild(row);
+        });
+        updateEstimatedCaseCount();
+      } catch (error) {
+        casePreview.innerHTML = `<span class="panel-badge">${error.message || "Error loading cases."}</span>`;
+        caseTableBody.innerHTML = `<tr><td colspan="6">${error.message || "Error loading cases."}</td></tr>`;
+        currentCaseRows = [];
+        updateEstimatedCaseCount();
+      }
+    }
+
+    function updateCaseMode() {
+      caseIdsWrap.classList.toggle("hidden-panel", caseMode.value !== "custom");
+      caseTableWrap.classList.toggle("hidden-panel", caseMode.value !== "selected");
+      updateEstimatedCaseCount();
+    }
+
+    caseMode?.addEventListener("change", updateCaseMode);
+    sourceRun?.addEventListener("change", refreshCasePreview);
+    caseIdsTextarea?.addEventListener("input", updateEstimatedCaseCount);
+    caseTableBody?.addEventListener("change", (event) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.classList.contains("automation-case-check")) {
+        updateEstimatedCaseCount();
+      }
+    });
+    loginTemplateSelect?.addEventListener("change", () => {
+      loadInjectLoginTemplate(loginTemplateSelect.value || "");
+    });
+    loginTemplateEditor?.addEventListener("input", () => {
+      syncInjectLoginValue();
+      saveLoginDraft();
+    });
+    loginCustomEditor?.addEventListener("input", () => {
+      syncInjectLoginValue();
+      saveLoginDraft();
+    });
+    const restoredLoginDraft = restoreLoginDraft();
+    updateCaseMode();
+    loadInjectLoginTemplate(loginTemplateSelect?.value || "");
+    if (restoredLoginDraft && loginTemplateSelect?.value && loginTemplateEditor && restoredLoginDraft.template_content) {
+      loginTemplateEditor.value = String(restoredLoginDraft.template_content);
+    }
+    if (restoredLoginDraft && !loginTemplateSelect?.value && loginCustomEditor && restoredLoginDraft.custom_content) {
+      loginCustomEditor.value = String(restoredLoginDraft.custom_content);
+    }
+    syncInjectLoginValue();
+    if (sourceRun?.value) {
+      refreshCasePreview();
+    }
+
+    form?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (isSubmitting) return;
+      isSubmitting = true;
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.classList.add("is-loading");
+        submitButton.textContent = "Running";
+      }
+      status.textContent = "Submitting automation job...";
+      if (caseMode.value === "selected") {
+        const selectedIds = Array.from(document.querySelectorAll(".automation-case-check:checked")).map((node) => node.value).filter(Boolean);
+        caseIdsTextarea.value = selectedIds.join(", ");
+        if (!selectedIds.length) {
+          status.textContent = "Select at least 1 case for selected mode.";
+          isSubmitting = false;
+          if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.textContent = "Generate End-to-End Automation";
+          }
+          return;
+        }
+      }
+      syncInjectLoginValue();
+      const data = new FormData(form);
+      try {
+        const response = await fetch("/api/automation-jobs", { method: "POST", body: data });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "Failed to generate automation.");
+        }
+        currentAutomationJobId = String(payload?.job?.id || "");
+        status.textContent = `Automation job is running: ${payload.job.run_name}`;
+        if (inlineQueuePanel) {
+          inlineQueuePanel.classList.remove("hidden-panel");
+          inlineQueuePanel.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        refreshInlineQueue();
+        startInlineQueuePolling();
+      } catch (error) {
+        status.textContent = error.message || "Failed to generate automation.";
+      } finally {
+        isSubmitting = false;
+      }
+    });
+
+    refreshQueueButton?.addEventListener("click", () => {
+      refreshInlineQueue();
+    });
+
+    window.addEventListener("beforeunload", () => {
+      if (inlineQueueTimer) {
+        window.clearInterval(inlineQueueTimer);
+      }
+    });
+  });
+</script>
+{% endblock %}
