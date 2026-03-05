@@ -1,7 +1,10 @@
 from datetime import datetime
 from urllib.parse import urlparse
 import json
+import os
+import functools
 from pathlib import Path
+from filelock import FileLock
 from core.config import RESULT_DIR
 
 
@@ -47,13 +50,31 @@ def is_automation_run(run_name: str) -> bool:
     return "_auto_" in str(run_name or "").strip().lower()
 
 
+@functools.lru_cache(maxsize=100)
+def _cached_read_json(path_str: str, modified_time: float) -> dict:
+    try:
+        return json.loads(Path(path_str).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
 def load_json_file(path: Path) -> dict:
     if not path.exists():
         return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    lock_path = str(path) + ".lock"
+    with FileLock(lock_path, timeout=5):
+        mtime = path.stat().st_mtime
+        return _cached_read_json(str(path), mtime)
+
+
+def atomic_write_json(filepath: Path | str, data: dict | list) -> None:
+    path = Path(filepath)
+    lock_path = str(path) + ".lock"
+    tmp_path = path.with_suffix('.tmp')
+    
+    with FileLock(lock_path, timeout=5):
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
 
 
 def resolve_run_dir(run_name: str) -> Path:

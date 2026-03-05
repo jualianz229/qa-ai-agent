@@ -19,6 +19,7 @@ from core.artifacts import (
     visual_regression_path,
 )
 from core.site_profiles import load_site_profile
+from core.utils import atomic_write_json
 
 console = Console(force_terminal=True)
 DEFAULT_VISUAL_VIEWPORTS = [
@@ -928,7 +929,7 @@ class Scanner:
         safe_name = project_info.get("safe_name", "unknown")
         run_dir = project_info.get("run_dir", self.reports_dir)
         json_path = json_artifact_path(run_dir, f"Page_Scope_{safe_name}_{timestamp}.json")
-        json_path.write_text(json.dumps(page_scope, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(json_path, page_scope)
         return json_path
 
     def save_crawled_pages(self, page_info: dict, project_info: dict) -> Path:
@@ -942,7 +943,7 @@ class Scanner:
             "selection": page_info.get("crawl_selection", []),
             "pages": page_info.get("crawled_pages", []),
         }
-        json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(json_path, payload)
         return json_path
 
     def save_raw_scan(self, page_info: dict, project_info: dict) -> Path:
@@ -950,7 +951,7 @@ class Scanner:
         safe_name = project_info.get("safe_name", "unknown")
         run_dir = project_info.get("run_dir", self.reports_dir)
         json_path = json_artifact_path(run_dir, f"raw_scan_{safe_name}_{timestamp}.json")
-        json_path.write_text(json.dumps(page_info, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(json_path, page_info)
         return json_path
 
     def save_visual_regression_artifacts(self, page_info: dict, project_info: dict) -> tuple[Path, Path]:
@@ -979,13 +980,10 @@ class Scanner:
         baseline_path = visual_baseline_path(run_dir)
         diff_path = visual_diff_path(run_dir)
         
-        baseline_path.write_text(json.dumps(baseline_payload, indent=2, ensure_ascii=False), encoding="utf-8")
-        diff_path.write_text(json.dumps(diff_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(baseline_path, baseline_payload)
+        atomic_write_json(diff_path, diff_payload)
+        atomic_write_json(visual_regression_path(run_dir), vr_render)
         
-        visual_regression_path(run_dir).write_text(
-            json.dumps(vr_render, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
         return baseline_path, diff_path
 
     def _capture_visual_render_variants(self, page, safe_name: str, run_dir: Path | None) -> dict:

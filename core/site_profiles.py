@@ -168,11 +168,11 @@ def merge_execution_learning(
     for _, cluster_profile in cluster_profiles:
         _compress_learning_profile(cluster_profile)
 
-    global_path.write_text(json.dumps(global_profile, indent=2, ensure_ascii=False), encoding="utf-8")
-    learned_path.write_text(json.dumps(domain_profile, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_json(global_path, global_profile)
+    atomic_write_json(learned_path, domain_profile)
     for path, cluster_profile in cluster_profiles:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cluster_profile, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(path, cluster_profile)
     return {
         "global_path": str(global_path),
         "domain_path": str(learned_path),
