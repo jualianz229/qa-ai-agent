@@ -15,7 +15,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install -r requirements.txt || true
+      - run: pip install -r requirements.txt
       - run: pip install pytest
 
-      - run: pytest || true
+      - name: Run Pytest
+        env:
+          PYTHONPATH: .
+        run: pytest
