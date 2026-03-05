@@ -28,13 +28,13 @@ def visual_regression_page():
 
 @bp.get("/visual-regression-testing/scan")
 def vrt_scan_page():
-    from website.dashboard import dashboard_metrics
+    from core.dashboard_data import dashboard_metrics
     return render_template("visual_regression_scan.html", **build_vrt_scan_context(dashboard_metrics=dashboard_metrics))
 
 
 @bp.get("/visual-regression-testing/changes")
 def vrt_changes_page():
-    from website.dashboard import dashboard_metrics
+    from core.dashboard_data import dashboard_metrics
     context = build_vrt_changes_context(
         result_dir=RESULT_DIR,
         list_runs=list_runs,
@@ -46,7 +46,7 @@ def vrt_changes_page():
 
 @bp.get("/visual-regression-testing/diff-monitor")
 def vrt_monitor_page():
-    from website.dashboard import dashboard_metrics
+    from core.dashboard_data import dashboard_metrics
     context = build_vrt_monitor_context(
         result_dir=RESULT_DIR,
         selected_run_name=str(request.args.get("run_name", "")).strip(),
@@ -79,13 +79,18 @@ def create_vrt_job_api():
         "template_name": "",
         "template_path": "",
         "csv_sep": ",",
-        "crawl_limit": int(request.form.get("crawl_limit", "1") or 1),
         "use_auth": form_bool(request.form.get("use_auth"), default=False),
         "adaptive_recrawl": False,
         "run_executor": False,
         "executor_headed": False,
         "run_name": "",
     }
+    
+    try:
+        payload["crawl_limit"] = max(1, min(int(request.form.get("crawl_limit", "1") or 1), 10))
+    except (ValueError, TypeError):
+        payload["crawl_limit"] = 1
+
     is_duplicate, duplicate_error = is_duplicate_recent_job(payload, cooldown_seconds=10)
     if is_duplicate:
         return jsonify({"ok": False, "error": duplicate_error}), 409

@@ -1,8 +1,10 @@
 from datetime import datetime
 from urllib.parse import urlparse
+import sys
 import json
 import os
 import functools
+import logging
 from pathlib import Path
 from filelock import FileLock
 from core.config import RESULT_DIR
@@ -13,6 +15,23 @@ def form_bool(value: str | None, default: bool = False) -> bool:
     if not normalized:
         return default
     return normalized in {"1", "true", "yes", "y", "on", "iya"}
+
+
+def setup_logging(log_file: str | Path = "Result/app.log") -> None:
+    path = Path(log_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        handlers=[
+            logging.FileHandler(path, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
+def get_logger(name: str) -> logging.Logger:
+    return logging.getLogger(name)
 
 
 def normalize_input_url(value: str) -> str:

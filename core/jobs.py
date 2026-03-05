@@ -12,7 +12,9 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from core.config import ROOT_DIR, RESULT_DIR
-from core.utils import parse_iso_datetime, atomic_write_json, load_json_file
+from core.utils import parse_iso_datetime, atomic_write_json, load_json_file, get_logger
+
+logger = get_logger("core.jobs")
 
 jobs_lock = threading.Lock()
 _JOBS_FILE = RESULT_DIR / "jobs.json"
@@ -65,10 +67,13 @@ def strip_ansi(text: str) -> str:
     return ANSI_PATTERN.sub("", text or "")
 
 
-def run_logged_process(job_id: str, command: list[str], cwd: str) -> int:
+def run_logged_process(job_id: str, command: list[str], cwd: str, timeout: int = 1800) -> int:
     process_env = os.environ.copy()
     process_env["PYTHONUNBUFFERED"] = "1"
     process_env["PYTHONIOENCODING"] = "utf-8"
+    
+    logger.info(f"Starting job {job_id} with command: {' '.join(command)}")
+    
     process = subprocess.Popen(
         command,
         cwd=cwd,
@@ -87,6 +92,7 @@ def run_logged_process(job_id: str, command: list[str], cwd: str) -> int:
                 for child in parent.children(recursive=True):
                     child.terminate()
                 parent.terminate()
+                logger.warning(f"Killed orphan child processes for job {job_id}")
             except Exception:
                 pass
 
@@ -102,16 +108,35 @@ def run_logged_process(job_id: str, command: list[str], cwd: str) -> int:
     reader_thread = threading.Thread(target=reader, daemon=True)
     reader_thread.start()
 
-    while process.poll() is None or not line_queue.empty():
+    start_time = datetime.now()
+    exit_code = None
+    
+    while True:
+        if process.poll() is not None:
+            exit_code = process.returncode
+            break
+            
+        if (datetime.now() - start_time).total_seconds() > timeout:
+            logger.error(f"Job {job_id} timed out after {timeout}s. Terminating.")
+            cleanup_process()
+            exit_code = -1
+            break
+
         try:
             line = line_queue.get(timeout=0.2)
+            append_job_log(job_id, line)
         except queue.Empty:
             continue
+
+    # Final drain
+    while not line_queue.empty():
+        line = line_queue.get()
         append_job_log(job_id, line)
 
     reader_thread.join(timeout=1)
     atexit.unregister(cleanup_process)
-    return process.wait()
+    logger.info(f"Job {job_id} finished with exit code {exit_code}")
+    return exit_code
 
 
 def generate_run_name(url: str) -> str:

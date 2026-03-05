@@ -34,6 +34,11 @@ from core.config import (
     ROOT_DIR,
     FEEDBACK_DIR,
 )
+# Setup main logging
+from core.utils import form_bool, load_json_file, setup_logging, get_logger
+setup_logging()
+logger = get_logger("website.dashboard")
+
 from core.dashboard_data import (
     build_ai_safety_audit,
     build_benchmark_snapshot,
@@ -45,6 +50,7 @@ from core.dashboard_data import (
     safe_run_artifact,
     sort_runs,
     dashboard_metrics,
+    _resolve_run_dir, # Added _resolve_run_dir to imports
 )
 from modules.end_to_end_automation.src.executor import CodeGenerator
 from core.feedback_bank import merge_human_feedback
