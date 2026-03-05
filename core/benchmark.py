@@ -5,7 +5,7 @@ from pathlib import Path
 from core.confidence import build_historical_confidence_signal, compute_composite_confidence
 from core.contradictions import analyze_cross_stage_contradictions
 from core.guardrails import validate_execution_plan, validate_page_scope, validate_test_scenarios
-from core.test_case_generator.planner import build_execution_plan, build_normalized_page_model, save_json_artifact
+from modules.test_case_generator.src.planner import build_execution_plan, build_normalized_page_model, save_json_artifact
 from core.site_profiles import derive_cluster_keys
 
 

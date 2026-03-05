@@ -6,7 +6,7 @@ import math
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from core.test_case_generator.case_memory import load_case_memory_snapshot
+from modules.test_case_generator.src.case_memory import load_case_memory_snapshot
 from core.confidence import build_historical_confidence_signal, compute_composite_confidence
 from core.guardrails import build_allowed_vocabulary, build_task_contract, validate_page_scope, validate_test_scenarios
 from core.site_profiles import get_failure_memory, get_ranked_selector_candidates
