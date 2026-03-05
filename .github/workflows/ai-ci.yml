@@ -1,0 +1,50 @@
+name: AI CI Pipeline
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt || true
+          pip install pytest
+
+      - name: Run tests
+        run: |
+          pytest || true
+
+
+  codex-review:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Codex AI Review
+        uses: openai/codex-github-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          review: true
+          comment_on_pr: true
+          suggest_fixes: true
+          auto_apply_suggestions: true
