@@ -63,3 +63,5 @@ python agent.py
 ## 🛡️ License
 
 Free to distribute and modify. Handle Target URL authorizations with care.
+
+- Testing Codex automated review integration.
