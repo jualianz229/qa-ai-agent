@@ -25,7 +25,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 
 from core.ai_engine import AIEngine
-from core.common.artifacts import (
+from core.artifacts import (
     confidence_analysis_path,
     execution_debug_path,
     execution_learning_path,
@@ -51,20 +51,19 @@ from core.scanner import Scanner
 from core.scenario_contract import validate_scenario_contract
 from core.safety_gates import build_execution_gate_decision
 from core.self_critique import refine_execution_plan_with_self_critique
-from core.common.site_profiles import enrich_site_profile_with_clusters, load_site_profile, merge_execution_learning
-from core.common.artifacts import contradiction_analysis_path
-from core.common.artifacts import anti_hallucination_audit_path, drift_analysis_path, execution_replay_verification_path, policy_pack_report_path
+from core.site_profiles import enrich_site_profile_with_clusters, load_site_profile, merge_execution_learning
+from core.artifacts import contradiction_analysis_path
+from core.artifacts import anti_hallucination_audit_path, drift_analysis_path, execution_replay_verification_path, policy_pack_report_path
 
+from core.config import INSTRUCTIONS_DIR, AUTH_DIR, RESULT_DIR
 load_dotenv()
 
 console = Console(force_terminal=True)
 runner = Scanner()
 
-Path("instructions").mkdir(exist_ok=True)
-
-auth_dir = Path("auth")
-auth_dir.mkdir(exist_ok=True)
-sample_auth_file = auth_dir / "sample_auth_state.json"
+INSTRUCTIONS_DIR.mkdir(parents=True, exist_ok=True)
+AUTH_DIR.mkdir(parents=True, exist_ok=True)
+sample_auth_file = AUTH_DIR / "sample_auth_state.json"
 if not sample_auth_file.exists():
     sample_auth_file.write_text(
         '{ "cookies": [ { "name": "session_id", "value": "xxxx", "domain": ".namadomain.com", "path": "/" } ] }',

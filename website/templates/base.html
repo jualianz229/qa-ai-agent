@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}TracePilot | AI QA Agent{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="icon" type="image/jpeg" href="/icon.jpg">
+    {% block styles %}{% endblock %}
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="sidebar-logo">TracePilot</div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <div class="nav-section">
+                <p class="nav-label">Main Dashboard</p>
+                <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">
+                    <span class="icon">📊</span> Overview
+                </a>
+            </div>
+
+            <div class="nav-section">
+                <p class="nav-label">Core Modules</p>
+                <a href="/scenario-testing"
+                    class="nav-link {% if '/scenario-testing' in request.path %}active{% endif %}">
+                    <span class="icon">🧪</span> Case Generator
+                </a>
+                <a href="/automation-testing"
+                    class="nav-link {% if '/automation-testing' in request.path %}active{% endif %}">
+                    <span class="icon">🤖</span> E2E Automation
+                </a>
+                <a href="/visual-regression-testing/scan"
+                    class="nav-link {% if '/visual-regression' in request.path %}active{% endif %}">
+                    <span class="icon">👁️</span> Visual Regression
+                </a>
+            </div>
+
+            <div class="nav-section">
+                <p class="nav-label">Execution Analysis</p>
+                <a href="/automation-results"
+                    class="nav-link {% if '/automation-results' in request.path %}active{% endif %}">
+                    <span class="icon">📈</span> Automation Runs
+                </a>
+                <a href="/benchmarks" class="nav-link {% if '/benchmarks' in request.path %}active{% endif %}">
+                    <span class="icon">🎯</span> Benchmarks
+                </a>
+            </div>
+
+            {% if sidebar_scenario_runs %}
+            <div class="nav-section">
+                <p class="nav-label">Recent Scenarios</p>
+                {% for run in sidebar_scenario_runs[:6] %}
+                <a href="/runs/{{ run.run_name }}" class="nav-link">
+                    <span class="icon">⚡</span> {{ run.run_name[:18] }}...
+                </a>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </nav>
+    </aside>
+
+    <main class="main-content">
+        <header class="page-header">
+            <p class="eyebrow">{% block header_kicker %}TracePilot Agent{% endblock %}</p>
+            <h1>{% block header_title %}TracePilot Dashboard{% endblock %}</h1>
+            <p class="subtitle">{% block header_subtitle %}Intelligent QA Platform for Modern Web Apps{% endblock %}</p>
+        </header>
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+
+</html>

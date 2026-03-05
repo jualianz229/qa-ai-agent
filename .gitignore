@@ -2,7 +2,6 @@
 .env
 __pycache__/
 *.py[cod]
-*.class
 .pytest_cache/
 venv/
 env/
@@ -10,37 +9,37 @@ env/
 
 # Agent Output & Reports
 Result/
-hasil/
 *.csv
 *.md
 !README.md
-!instructions/
 
 # Database & Logs
 *.log
 *.sqlite
 *.sqlite3
 *.db
-*.db-journal
 
-# Testing & Temp files
+# Modular Structure Configs
+configs/auth/auth_state.json
+configs/auth/session_state.json
+!configs/auth/sample_auth_state.json
+
+# Knowledge & Memory
+configs/site_profiles/case_memory/
+configs/site_profiles/learned/
+configs/site_profiles/flaky/
+configs/site_profiles/feedback/
+configs/site_profiles/session.json
+
+# Module specific temp/data
+modules/*/baselines/
+modules/*/evidence/
+
+# Maintenance & Testing
+test_ai/
 tests/
-pytest_out.txt
-from pathlib import Path.py
 err.txt
-
-# Auth & Config
-auth/auth_state.json
-auth/session_state.json
-!auth/sample_auth_state.json
-
-# Runtime knowledge/memory banks
-site_profiles/case_memory/
-site_profiles/learned/
-site_profiles/flaky/
-site_profiles/feedback/
-site_profiles/session.json
-visual_regression_testing/baselines/
+pytest_out.txt
 
 # OS/IDE metadata
 .DS_Store
