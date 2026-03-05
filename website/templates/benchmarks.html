@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Benchmarks | TracePilot{% endblock %}
+
+{% block header_kicker %}Execution Analysis{% endblock %}
+{% block header_title %}Benchmarks Snapshot{% endblock %}
+{% block header_subtitle %}Analysis of your latest metrics compared to historical performance and safety indexes.{%
+endblock %}
+
+{% block content %}
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Total Benchmarked</div>
+        <div class="stat-value">{{ benchmark.total_benchmarked or 0 }}</div>
+        <div class="stat-sub">{{ benchmark.last_updated }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Avg. Safety Index</div>
+        <div
+            class="stat-value {% if benchmark.avg_safety_index < 70 %}danger{% elif benchmark.avg_safety_index < 90 %}warning{% else %}highlight{% endif %}">
+            {{ benchmark.avg_safety_index }}%</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">AI Reliability</div>
+        <div class="stat-value highlight">{{ benchmark.ai_reliability or "N/A" }}%</div>
+    </div>
+</div>
+
+<div class="dashboard-grid">
+    <section class="dashboard-section card glass" style="grid-column: span 2;">
+        <div class="section-header">
+            <h3><i data-lucide="line-chart"></i> Historical Performance</h3>
+        </div>
+        <div class="table-shell">
+            <table class="table-minimal">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Run Name</th>
+                        <th>Total Cases</th>
+                        <th>Passed</th>
+                        <th>Failed</th>
+                        <th>Safety Index</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for run in benchmark.history %}
+                    <tr>
+                        <td>{{ run.created_at[:10] }}</td>
+                        <td><a href="/runs/{{ run.run_name }}">{{ run.run_name[:15] }}...</a></td>
+                        <td>{{ run.total_cases }}</td>
+                        <td>{{ run.status_counts.passed or 0 }}</td>
+                        <td><span class="{% if run.status_counts.failed > 0 %}danger{% endif %}">{{
+                                run.status_counts.failed or 0 }}</span></td>
+                        <td>{{ run.safety_index }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="dashboard-section card glass">
+        <div class="section-header">
+            <h3><i data-lucide="target"></i> Analysis Insight</h3>
+        </div>
+        <div class="summary-content">
+            <p>{{ benchmark.insight or "No insights available yet for your latest benchmark data. Keep running more
+                tests to gather data." }}</p>
+        </div>
+    </section>
+</div>
+{% endblock %}

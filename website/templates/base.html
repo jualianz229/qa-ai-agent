@@ -19,22 +19,22 @@
         <nav class="sidebar-nav">
             <div class="nav-section">
                 <p class="nav-label">Main Dashboard</p>
-                <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">
+                <a href="{{ url_for('home') }}" class="nav-link {% if request.path == '/' %}active{% endif %}">
                     <span class="icon">📊</span> Overview
                 </a>
             </div>
 
             <div class="nav-section">
                 <p class="nav-label">Core Modules</p>
-                <a href="/scenario-testing"
+                <a href="{{ url_for('test_case_generator.scenario_testing_page') }}"
                     class="nav-link {% if '/scenario-testing' in request.path %}active{% endif %}">
                     <span class="icon">🧪</span> Case Generator
                 </a>
-                <a href="/automation-testing"
+                <a href="{{ url_for('end_to_end_automation.automation_testing_page') }}"
                     class="nav-link {% if '/automation-testing' in request.path %}active{% endif %}">
                     <span class="icon">🤖</span> E2E Automation
                 </a>
-                <a href="/visual-regression-testing/scan"
+                <a href="{{ url_for('visual_regression_testing.vrt_scan_page') }}"
                     class="nav-link {% if '/visual-regression' in request.path %}active{% endif %}">
                     <span class="icon">👁️</span> Visual Regression
                 </a>
@@ -42,11 +42,12 @@
 
             <div class="nav-section">
                 <p class="nav-label">Execution Analysis</p>
-                <a href="/automation-results"
+                <a href="{{ url_for('end_to_end_automation.automation_results_page') }}"
                     class="nav-link {% if '/automation-results' in request.path %}active{% endif %}">
                     <span class="icon">📈</span> Automation Runs
                 </a>
-                <a href="/benchmarks" class="nav-link {% if '/benchmarks' in request.path %}active{% endif %}">
+                <a href="{{ url_for('benchmark_page') }}"
+                    class="nav-link {% if '/benchmarks' in request.path %}active{% endif %}">
                     <span class="icon">🎯</span> Benchmarks
                 </a>
             </div>
@@ -55,7 +56,7 @@
             <div class="nav-section">
                 <p class="nav-label">Recent Scenarios</p>
                 {% for run in sidebar_scenario_runs[:6] %}
-                <a href="/runs/{{ run.run_name }}" class="nav-link">
+                <a href="{{ url_for('run_detail', run_name=run.run_name) }}" class="nav-link">
                     <span class="icon">⚡</span> {{ run.run_name[:18] }}...
                 </a>
                 {% endfor %}

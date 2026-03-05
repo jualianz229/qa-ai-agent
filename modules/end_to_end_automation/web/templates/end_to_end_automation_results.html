@@ -15,13 +15,13 @@
       <span>{{ metrics.runs }} total runs</span>
     </div>
   </div>
-  <form class="filter-toolbar" action="{{ url_for('automation_results_page') }}" method="get">
+  <form class="filter-toolbar" action="{{ url_for('end_to_end_automation.automation_results_page') }}" method="get">
     <label class="filter-field">
       <span>Sort runs</span>
       <select name="sort" onchange="this.form.submit()">
-        <option value="latest" {% if (sort_mode or 'latest') == 'latest' %}selected{% endif %}>Latest</option>
-        <option value="safety_risk" {% if sort_mode == 'safety_risk' %}selected{% endif %}>Safety risk first</option>
-        <option value="failed_high" {% if sort_mode == 'failed_high' %}selected{% endif %}>Most failed first</option>
+        <option value="latest" {% if (sort_mode or 'latest' )=='latest' %}selected{% endif %}>Latest</option>
+        <option value="safety_risk" {% if sort_mode=='safety_risk' %}selected{% endif %}>Safety risk first</option>
+        <option value="failed_high" {% if sort_mode=='failed_high' %}selected{% endif %}>Most failed first</option>
       </select>
     </label>
   </form>
@@ -41,22 +41,26 @@
       </thead>
       <tbody>
         {% for run in runs %}
-          <tr>
-            <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.run_name) }}">{{ run.run_name }}</a></td>
-            <td>{{ run.page_type or "-" }}</td>
-            <td>{{ run.total_cases }}</td>
-            <td>{{ run.status_counts.passed or 0 }}</td>
-            <td>{{ run.status_counts.failed or 0 }}</td>
-            <td>{{ run.video_count }}</td>
-            <td><span class="confidence">{{ run.confidence_score }}</span></td>
-            <td>
-              <span class="badge {% if run.safety_status == 'critical' %}badge-failed{% elif run.safety_status == 'warning' %}badge-skipped{% else %}badge-passed{% endif %}">
-                {{ run.safety_index or 0 }}/100
-              </span>
-            </td>
-          </tr>
+        <tr>
+          <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.run_name) }}">{{ run.run_name }}</a>
+          </td>
+          <td>{{ run.page_type or "-" }}</td>
+          <td>{{ run.total_cases }}</td>
+          <td>{{ run.status_counts.passed or 0 }}</td>
+          <td>{{ run.status_counts.failed or 0 }}</td>
+          <td>{{ run.video_count }}</td>
+          <td><span class="confidence">{{ run.confidence_score }}</span></td>
+          <td>
+            <span
+              class="badge {% if run.safety_status == 'critical' %}badge-failed{% elif run.safety_status == 'warning' %}badge-skipped{% else %}badge-passed{% endif %}">
+              {{ run.safety_index or 0 }}/100
+            </span>
+          </td>
+        </tr>
         {% else %}
-          <tr><td colspan="8">No automation results yet.</td></tr>
+        <tr>
+          <td colspan="8">No automation results yet.</td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
