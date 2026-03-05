@@ -84,7 +84,10 @@ def deep_merge(base: dict, override: dict) -> dict:
     return merged
 
 
-def _profile_candidate_paths(url: str, profiles_dir: str | Path = "site_profiles") -> list[Path]:
+def _profile_candidate_paths(url: str, profiles_dir: str | Path | None = None) -> list[Path]:
+    from core.config import PROFILES_DIR
+    if profiles_dir is None:
+        profiles_dir = PROFILES_DIR
     parsed = urlparse(url)
     host = (parsed.netloc or "").replace("www.", "").lower()
     safe_host = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in host)
@@ -97,7 +100,10 @@ def _profile_candidate_paths(url: str, profiles_dir: str | Path = "site_profiles
     ]
 
 
-def load_site_profile(url: str, profiles_dir: str | Path = "site_profiles") -> dict:
+def load_site_profile(url: str, profiles_dir: str | Path | None = None) -> dict:
+    from core.config import PROFILES_DIR
+    if profiles_dir is None:
+        profiles_dir = PROFILES_DIR
     profile = deepcopy(DEFAULT_SITE_PROFILE)
     loaded_from = []
     for path in _profile_candidate_paths(url, profiles_dir):
@@ -116,9 +122,12 @@ def load_site_profile(url: str, profiles_dir: str | Path = "site_profiles") -> d
 def merge_execution_learning(
     url: str,
     learning_payload: dict,
-    profiles_dir: str | Path = "site_profiles",
+    profiles_dir: str | Path | None = None,
     knowledge_context: dict | None = None,
 ) -> dict | None:
+    from core.config import PROFILES_DIR
+    if profiles_dir is None:
+        profiles_dir = PROFILES_DIR
     learning_entries = list(learning_payload.get("learning_entries", []))
     if not learning_entries:
         return None

@@ -30,7 +30,10 @@ from core.feedback_bank import load_run_feedback
 from core.site_profiles import load_knowledge_bank_snapshot
 
 
-def list_runs(results_dir: str | Path = "Result") -> list[dict]:
+def list_runs(results_dir: str | Path | None = None) -> list[dict]:
+    from core.config import RESULT_DIR
+    if results_dir is None:
+        results_dir = RESULT_DIR
     root = Path(results_dir)
     if not root.exists():
         return []
@@ -351,7 +354,10 @@ def build_run_detail(run_dir: str | Path) -> dict:
     }
 
 
-def build_knowledge_snapshot(url: str = "", profiles_dir: str | Path = "site_profiles") -> dict:
+def build_knowledge_snapshot(url: str = "", profiles_dir: str | Path | None = None) -> dict:
+    from core.config import PROFILES_DIR
+    if profiles_dir is None:
+        profiles_dir = PROFILES_DIR
     return load_knowledge_bank_snapshot(url, profiles_dir=profiles_dir)
 
 
