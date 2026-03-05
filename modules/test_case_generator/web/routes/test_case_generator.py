@@ -116,7 +116,7 @@ def _parse_scenario_job_request():
 
 @bp.get("/scenario-testing")
 def scenario_testing_page():
-    from website.dashboard import dashboard_metrics
+    from core.dashboard_data import dashboard_metrics
     context = build_test_case_generator_context(
         instructions_dir=INSTRUCTIONS_DIR,
         list_instruction_templates=list_instruction_templates,
@@ -129,7 +129,7 @@ def scenario_testing_page():
 
 @bp.get("/runs")
 def runs_page():
-    from website.dashboard import dashboard_metrics
+    from core.dashboard_data import dashboard_metrics
     sort_mode = request.args.get("sort", "latest").strip()
     context = build_all_test_cases_context(
         result_dir=RESULT_DIR,
@@ -163,6 +163,15 @@ def create_job_api():
         "run_executor": form_bool(request.form.get("run_executor"), default=False),
         "executor_headed": form_bool(request.form.get("executor_headed"), default=False),
     }
+
+    try:
+        payload["crawl_limit"] = max(1, min(int(payload.get("crawl_limit", 3)), 10))
+    except ValueError:
+        return jsonify({"ok": False, "error": "Invalid crawl limit. Must be an integer between 1 and 10."}), 400
+    
+    if len(str(payload.get("instruction", ""))) > 2000:
+        return jsonify({"ok": False, "error": "Custom instructions cannot exceed 2000 characters."}), 400
+
     is_duplicate, duplicate_error = is_duplicate_recent_job(payload, cooldown_seconds=10)
     if is_duplicate:
         return jsonify({"ok": False, "error": duplicate_error}), 409
@@ -182,6 +191,15 @@ def create_scenario_job_api():
         "run_executor": False,
         "executor_headed": False,
     }
+
+    try:
+        payload["crawl_limit"] = max(1, min(int(payload.get("crawl_limit", 3)), 10))
+    except ValueError:
+        return jsonify({"ok": False, "error": "Invalid crawl limit. Must be an integer between 1 and 10."}), 400
+    
+    if len(str(payload.get("instruction", ""))) > 2000:
+        return jsonify({"ok": False, "error": "Custom instructions cannot exceed 2000 characters."}), 400
+
     is_duplicate, duplicate_error = is_duplicate_recent_job(payload, cooldown_seconds=10)
     if is_duplicate:
         return jsonify({"ok": False, "error": duplicate_error}), 409

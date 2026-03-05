@@ -6,15 +6,21 @@ import subprocess
 import sys
 import threading
 import uuid
+import atexit
+import psutil
 from datetime import datetime
 from urllib.parse import urlparse
 
-from core.config import ROOT_DIR
-from core.utils import parse_iso_datetime
+from core.config import ROOT_DIR, RESULT_DIR
+from core.utils import parse_iso_datetime, atomic_write_json, load_json_file
 
 jobs_lock = threading.Lock()
-jobs: dict[str, dict] = {}
+_JOBS_FILE = RESULT_DIR / "jobs.json"
+jobs: dict[str, dict] = load_json_file(_JOBS_FILE) if _JOBS_FILE.exists() else {}
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+def _save_jobs_locked():
+    atomic_write_json(_JOBS_FILE, jobs)
 
 
 def get_job(job_id: str) -> dict:
@@ -34,17 +40,25 @@ def get_all_jobs() -> list[dict]:
 
 def append_job_log(job_id: str, line: str) -> None:
     with jobs_lock:
+        if job_id not in jobs:
+            return
         job = jobs[job_id]
         job["log_lines"].append(line)
         job["log_lines"] = job["log_lines"][-1500:]
         job["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        # Save every 50 lines or so to avoid extreme disk I/O, but to be simple we save per line
+        # Alternatively, rely on update_job and create_job for metadata persistence
+        _save_jobs_locked()
 
 
 def update_job(job_id: str, **fields) -> None:
     with jobs_lock:
+        if job_id not in jobs:
+            return
         job = jobs[job_id]
         job.update(fields)
         job["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        _save_jobs_locked()
 
 
 def strip_ansi(text: str) -> str:
@@ -66,6 +80,18 @@ def run_logged_process(job_id: str, command: list[str], cwd: str) -> int:
         errors="replace",
     )
 
+    def cleanup_process():
+        if process.poll() is None:
+            try:
+                parent = psutil.Process(process.pid)
+                for child in parent.children(recursive=True):
+                    child.terminate()
+                parent.terminate()
+            except Exception:
+                pass
+
+    atexit.register(cleanup_process)
+
     line_queue: queue.Queue[str] = queue.Queue()
 
     def reader() -> None:
@@ -84,6 +110,7 @@ def run_logged_process(job_id: str, command: list[str], cwd: str) -> int:
         append_job_log(job_id, line)
 
     reader_thread.join(timeout=1)
+    atexit.unregister(cleanup_process)
     return process.wait()
 
 
@@ -144,7 +171,7 @@ def run_job(job_id: str, payload: dict) -> None:
     # For now, it only runs the basic 'agent.py' command.
     command = [
         sys.executable,
-        "agent.py",
+        str(ROOT_DIR / "agent.py"),
         "--url",
         payload["url"],
         "--run-name",
@@ -189,6 +216,7 @@ def create_job(payload: dict) -> dict:
     }
     with jobs_lock:
         jobs[job_id] = job
+        _save_jobs_locked()
     thread = threading.Thread(target=run_job, args=(job_id, payload), daemon=True)
     thread.start()
     return job

@@ -28,6 +28,7 @@ from core.artifacts import (
 from core.confidence import build_historical_confidence_signal, compute_composite_confidence
 from core.feedback_bank import load_run_feedback
 from core.site_profiles import load_knowledge_bank_snapshot
+from core.utils import parse_iso_datetime, load_json_file, atomic_write_json
 
 
 def list_runs(results_dir: str | Path | None = None) -> list[dict]:
@@ -1539,7 +1540,7 @@ def _load_or_build_visual_signature(run_path: Path, raw_scan: dict, page_scope: 
         return _load_json_if_exists(signature_path)
     signature = _build_visual_signature(raw_scan, page_scope, page_model)
     if signature:
-        visual_signature_path(run_path).write_text(json.dumps(signature, indent=2), encoding="utf-8")
+        atomic_write_json(visual_signature_path(run_path), signature)
     return signature
 
 
@@ -1623,3 +1624,157 @@ def sort_runs(runs: list[dict], mode: str = "latest") -> list[dict]:
             ),
         )
     return list(runs)
+
+
+def _get_recovery_actions(run_name: str, limit: int = 20) -> list[dict]:
+    from core.utils import load_json_file
+    run_dir = resolve_run_dir(run_name)
+    if not run_dir.exists():
+        raise FileNotFoundError(run_name)
+    path = recovery_actions_path(run_dir, create=False)
+    payload = load_json_file(path)
+    actions = list(payload.get("actions", []))
+    return actions[-max(1, int(limit or 1)):]
+
+
+def _collect_recovery_audit_rows(limit_per_run: int = 40) -> list[dict]:
+    from core.config import RESULT_DIR
+    rows = []
+    for run in list_runs(RESULT_DIR):
+        run_name = str(run.get("run_name", "")).strip()
+        if not run_name:
+            continue
+        try:
+            actions = _get_recovery_actions(run_name, limit=limit_per_run)
+        except Exception:
+            continue
+        for action in actions:
+            rows.append(
+                {
+                    "run_name": run_name,
+                    "timestamp": str(action.get("timestamp", "")).strip(),
+                    "action": str(action.get("action", "")).strip(),
+                    "strategy": str(action.get("strategy", "")).strip(),
+                    "status": str(action.get("status", "")).strip(),
+                    "reason": str(action.get("reason", "")).strip(),
+                    "job_id": str(action.get("job_id", "")).strip(),
+                    "target_run": str(action.get("target_run", "")).strip(),
+                }
+            )
+    rows.sort(key=lambda item: (item.get("timestamp", ""), item.get("run_name", "")), reverse=True)
+    return rows
+
+
+def _recovery_metrics_snapshot(limit_per_run: int = 60) -> dict:
+    from core.jobs import get_all_jobs
+    rows = _collect_recovery_audit_rows(limit_per_run=limit_per_run)
+    strategy_counts = {
+        "safe_rerun": {"completed": 0, "failed": 0, "canceled": 0},
+        "retry_failed": {"completed": 0, "failed": 0, "canceled": 0},
+    }
+    skipped = 0
+    top_failure_reasons: dict[str, int] = {}
+    for item in rows:
+        strategy = str(item.get("strategy", "")).strip().lower()
+        status = str(item.get("status", "")).strip().lower()
+        reason = str(item.get("reason", "")).strip()
+        if strategy in strategy_counts and status in {"completed", "failed", "canceled"}:
+            strategy_counts[strategy][status] += 1
+        if status == "skipped":
+            skipped += 1
+        if status in {"failed", "canceled", "skipped"} and reason:
+            top_failure_reasons[reason] = top_failure_reasons.get(reason, 0) + 1
+
+    job_items = get_all_jobs()
+    pending_recovery_jobs = 0
+    for job in job_items:
+        payload = job.get("payload", {}) if isinstance(job.get("payload", {}), dict) else {}
+        mode = str(payload.get("mode", "")).strip().lower()
+        status = str(job.get("status", "")).strip().lower()
+        if mode in {"safe_rerun", "retry_failed"} and status in {"queued", "running"}:
+            pending_recovery_jobs += 1
+
+    def _success_rate(bucket: dict) -> float:
+        completed = int(bucket.get("completed", 0) or 0)
+        failed = int(bucket.get("failed", 0) or 0) + int(bucket.get("canceled", 0) or 0)
+        total = completed + failed
+        return round(completed / total, 2) if total else 0.0
+
+    return {
+        "total_actions": len(rows),
+        "pending_recovery_jobs": pending_recovery_jobs,
+        "skipped_count": skipped,
+        "strategy": {
+            "safe_rerun": {
+                **strategy_counts["safe_rerun"],
+                "success_rate": _success_rate(strategy_counts["safe_rerun"]),
+            },
+            "retry_failed": {
+                **strategy_counts["retry_failed"],
+                "success_rate": _success_rate(strategy_counts["retry_failed"]),
+            },
+        },
+        "top_failure_reasons": [
+            {"reason": key, "count": value}
+            for key, value in sorted(top_failure_reasons.items(), key=lambda item: (-item[1], item[0]))[:6]
+        ],
+    }
+
+
+def dashboard_metrics() -> dict:
+    from core.config import RESULT_DIR
+    runs = list_runs(RESULT_DIR)
+    scenario_runs = [item for item in runs if not is_automation_or_recovery_run(item.get("run_name", ""))]
+    automation_runs = [item for item in runs if is_automation_run(item.get("run_name", ""))]
+    recovery_metrics = _recovery_metrics_snapshot(limit_per_run=50)
+    triage_snapshot = build_triage_inbox(RESULT_DIR, limit=20)
+    safety_audit = build_ai_safety_audit(RESULT_DIR, limit=30)
+    safety_values = [int(item.get("safety_index", 0) or 0) for item in runs]
+    blocked_runs = sum(1 for item in runs if bool(item.get("execution_gate", {}).get("blocked", False)))
+    policy_failures = sum(1 for item in runs if not bool(item.get("policy_pack_report", {}).get("success", True)))
+    visual_regression_runs = sum(1 for item in runs if int(item.get("vrt_change_count", 0) or 0) > 0)
+    totals = {
+        "runs": len(runs),
+        "scenario_runs": len(scenario_runs),
+        "automation_runs": len(automation_runs),
+        "cases": sum(item.get("total_cases", 0) for item in runs),
+        "videos": sum(item.get("video_count", 0) for item in runs),
+        "failed": sum(item.get("status_counts", {}).get("failed", 0) for item in runs),
+        "alerts": sum(item.get("alert_count", 0) for item in runs),
+        "blocked_runs": blocked_runs,
+        "policy_failures": policy_failures,
+        "average_safety_index": int(round(sum(safety_values) / len(safety_values))) if safety_values else 0,
+        "recovery_actions": int(recovery_metrics.get("total_actions", 0) or 0),
+        "recovery_pending": int(recovery_metrics.get("pending_recovery_jobs", 0) or 0),
+        "safe_rerun_success_rate": int(round(float(recovery_metrics.get("strategy", {}).get("safe_rerun", {}).get("success_rate", 0.0) or 0.0) * 100)),
+        "retry_failed_success_rate": int(round(float(recovery_metrics.get("strategy", {}).get("retry_failed", {}).get("success_rate", 0.0) or 0.0) * 100)),
+        "recovery_top_failure_reasons": list(recovery_metrics.get("top_failure_reasons", []))[:4],
+        "vrt_runs": visual_regression_runs,
+        "needs_review": int(triage_snapshot.get("candidate_count", 0) or 0),
+        "safety_incidents": int(safety_audit.get("high_risk_incidents", 0) or 0),
+    }
+
+    modes_dist = {}
+    for item in scenario_runs:
+        mode = str(item.get("payload", {}).get("mode", "ai_exploration") or "ai_exploration").strip()
+        modes_dist[mode] = modes_dist.get(mode, 0) + 1
+    sorted_modes = [{"mode": key, "count": val} for key, val in sorted(modes_dist.items(), key=lambda t: t[1], reverse=True)]
+
+    recent_runs = sorted(scenario_runs, key=lambda item: float(item.get("modified_ts", 0) or 0), reverse=True)[:14]
+    trend_labels = []
+    trend_passed = []
+    trend_failed = []
+    for item in reversed(recent_runs):
+        trend_labels.append(item.get("timestamp_label", ""))
+        counts = item.get("status_counts", {})
+        trend_passed.append(counts.get("passed", 0))
+        trend_failed.append(counts.get("failed", 0))
+
+    return {
+        "totals": totals,
+        "modes_dist": sorted_modes,
+        "trend_labels": trend_labels,
+        "trend_passed": trend_passed,
+        "trend_failed": trend_failed,
+    }
+
