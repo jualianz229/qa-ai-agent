@@ -40,7 +40,7 @@
             {% for job in active_jobs %}
             <div class="job-item">
                 <div class="job-info">
-                    <span class="job-name">{{ job.payload.target_url[:30] }}...</span>
+                    <span class="job-name">{{ job.payload.url[:30] }}...</span>
                     <span class="job-status status-{{ job.status }}">{{ job.status }}</span>
                 </div>
                 <div class="progress-bar">
