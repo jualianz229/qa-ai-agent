@@ -12,7 +12,7 @@
             <h1>Runs</h1>
         </div>
         <div class="metric-inline">
-            <span>{{ metrics.runs }} total runs recorded</span>
+            <span>{{ metrics.get('runs', 0) }} total runs recorded</span>
         </div>
     </div>
 
@@ -45,22 +45,21 @@
             <tbody>
                 {% for run in runs %}
                 <tr>
-                    <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.run_name) }}">{{
-                            run.run_name[:25] }}...</a></td>
-                    <td><span class="panel-badge">{{ run.page_type|upper }}</span></td>
-                    <td>{{ run.total_cases }}</td>
-                    <td>{{ run.status_counts.passed or 0 }}</td>
-                    <td><span class="{% if run.status_counts.failed > 0 %}danger{% endif %}">{{ run.status_counts.failed
-                            or 0 }}</span></td>
+                    <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">{{
+                            (run.get('run_name') or '')[:25] }}...</a></td>
+                    <td><span class="panel-badge">{{ (run.get('page_type') or '')|upper }}</span></td>
+                    <td>{{ run.get('total_cases', 0) }}</td>
+                    <td>{{ (run.status_counts or {}).get('passed', 0) }}</td>
+                    <td><span class="{% if (run.status_counts or {}).get('failed', 0) > 0 %}danger{% endif %}">{{ (run.status_counts or {}).get('failed', 0) }}</span></td>
                     <td>
                         <span
-                            class="badge {% if run.safety_index < 70 %}badge-failed{% elif run.safety_index < 90 %}badge-skipped{% else %}badge-passed{% endif %}">
-                            {{ run.safety_index }}%
+                            class="badge {% if run.get('safety_index', 0) < 70 %}badge-failed{% elif run.get('safety_index', 0) < 90 %}badge-skipped{% else %}badge-passed{% endif %}">
+                            {{ run.get('safety_index', 0) }}%
                         </span>
                     </td>
                     <td>
                         <a class="inline-mini-button"
-                            href="{{ url_for('run_detail', run_name=run.run_name) }}">Details</a>
+                            href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">Details</a>
                     </td>
                 </tr>
                 {% else %}

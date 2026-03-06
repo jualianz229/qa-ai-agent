@@ -11,25 +11,25 @@ endblock %}
 <div class="stats-grid">
     <div class="stat-card">
         <div class="stat-label">Total Benchmarked</div>
-        <div class="stat-value">{{ benchmark.total_benchmarked or 0 }}</div>
-        <div class="stat-sub">{{ benchmark.last_updated }}</div>
+        <div class="stat-value">{{ benchmark.get('total_benchmarked', 0) }}</div>
+        <div class="stat-sub">{{ benchmark.get('last_updated', '') }}</div>
     </div>
     <div class="stat-card">
         <div class="stat-label">Avg. Safety Index</div>
         <div
-            class="stat-value {% if benchmark.avg_safety_index < 70 %}danger{% elif benchmark.avg_safety_index < 90 %}warning{% else %}highlight{% endif %}">
-            {{ benchmark.avg_safety_index }}%</div>
+            class="stat-value {% if benchmark.get('avg_safety_index', 0) < 70 %}danger{% elif benchmark.get('avg_safety_index', 0) < 90 %}warning{% else %}highlight{% endif %}">
+            {{ benchmark.get('avg_safety_index', 0) }}%</div>
     </div>
     <div class="stat-card">
         <div class="stat-label">AI Reliability</div>
-        <div class="stat-value highlight">{{ benchmark.ai_reliability or "N/A" }}%</div>
+        <div class="stat-value highlight">{{ benchmark.get('ai_reliability') or "N/A" }}%</div>
     </div>
 </div>
 
 <div class="dashboard-grid">
-    <section class="dashboard-section card glass" style="grid-column: span 2;">
+    <section class="dashboard-section card" style="grid-column: span 2;">
         <div class="section-header">
-            <h3><i data-lucide="line-chart"></i> Historical Performance</h3>
+            <h3><span class="icon">📈</span> Historical Performance</h3>
         </div>
         <div class="table-shell">
             <table class="table-minimal">
@@ -44,15 +44,14 @@ endblock %}
                     </tr>
                 </thead>
                 <tbody>
-                    {% for run in benchmark.history %}
+                    {% for run in (benchmark.history or []) %}
                     <tr>
-                        <td>{{ run.created_at[:10] }}</td>
-                        <td><a href="/runs/{{ run.run_name }}">{{ run.run_name[:15] }}...</a></td>
-                        <td>{{ run.total_cases }}</td>
-                        <td>{{ run.status_counts.passed or 0 }}</td>
-                        <td><span class="{% if run.status_counts.failed > 0 %}danger{% endif %}">{{
-                                run.status_counts.failed or 0 }}</span></td>
-                        <td>{{ run.safety_index }}%</td>
+                        <td>{{ (run.created_at or '')[:10] }}</td>
+                        <td><a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">{{ (run.get('run_name') or '')[:15] }}...</a></td>
+                        <td>{{ run.get('total_cases', 0) }}</td>
+                        <td>{{ (run.status_counts or {}).get('passed', 0) }}</td>
+                        <td><span class="{% if (run.status_counts or {}).get('failed', 0) > 0 %}danger{% endif %}">{{ (run.status_counts or {}).get('failed', 0) }}</span></td>
+                        <td>{{ run.get('safety_index', 0) }}%</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -60,12 +59,12 @@ endblock %}
         </div>
     </section>
 
-    <section class="dashboard-section card glass">
+    <section class="dashboard-section card">
         <div class="section-header">
-            <h3><i data-lucide="target"></i> Analysis Insight</h3>
+            <h3><span class="icon">🎯</span> Analysis Insight</h3>
         </div>
         <div class="summary-content">
-            <p>{{ benchmark.insight or "No insights available yet for your latest benchmark data. Keep running more
+            <p>{{ benchmark.get('insight') or "No insights available yet for your latest benchmark data. Keep running more
                 tests to gather data." }}</p>
         </div>
     </section>

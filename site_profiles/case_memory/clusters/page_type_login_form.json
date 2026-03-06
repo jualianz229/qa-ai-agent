@@ -1,0 +1,84 @@
+{
+  "patterns": {
+    "login_form::authentication::negative": {
+      "pattern_key": "login_form::authentication::negative",
+      "page_type": "login_form",
+      "module": "authentication",
+      "category": "Login",
+      "test_type": "Negative",
+      "automation_counts": {
+        "auto": 22
+      },
+      "step_profiles": {
+        "open_url > fill > fill > click": 17,
+        "open_url > inspect > fill > click": 2,
+        "open_url > fill > inspect > click": 2,
+        "open_url > inspect > inspect > click": 1
+      },
+      "expected_profiles": {
+        "text_visible": 22
+      },
+      "example_titles": [
+        "Password field - Maximum length",
+        "Username field - Maximum length",
+        "Login with special characters in password",
+        "Login with special characters in username",
+        "Password field - Whitespace",
+        "Username field - Whitespace"
+      ],
+      "signatures": [
+        "frm_010::authentication::password_field_maximum_length",
+        "frm_009::authentication::username_field_maximum_length",
+        "frm_007::authentication::login_with_special_characters_in_password",
+        "frm_006::authentication::login_with_special_characters_in_username",
+        "frm_015::authentication::password_field_whitespace",
+        "frm_014::authentication::username_field_whitespace",
+        "frm_005::authentication::login_with_empty_password",
+        "frm_004::authentication::login_with_empty_username",
+        "frm_013::authentication::login_with_incorrect_username_and_password",
+        "frm_003::authentication::login_with_invalid_password",
+        "frm_002::authentication::login_with_invalid_username",
+        "frm_011::authentication::password_field_special_characters"
+      ],
+      "hits": 22,
+      "last_used_at": "2026-03-06T03:29:07"
+    },
+    "login_form::authentication::positive": {
+      "pattern_key": "login_form::authentication::positive",
+      "page_type": "login_form",
+      "module": "authentication",
+      "category": "Login",
+      "test_type": "Positive",
+      "automation_counts": {
+        "auto": 7
+      },
+      "step_profiles": {
+        "open_url > fill > fill > click": 7
+      },
+      "expected_profiles": {
+        "url_change": 5,
+        "generic": 2
+      },
+      "example_titles": [
+        "Successful Login - performance_glitch_user",
+        "Successful Login - standard_user",
+        "Login with valid credentials",
+        "Login with 'test' credentials",
+        "Login with 'performance_glitch_user' credentials",
+        "Successful Login with 'standard_user' credentials"
+      ],
+      "signatures": [
+        "frm_016::authentication::successful_login_performance_glitch_user",
+        "frm_011::authentication::successful_login_standard_user",
+        "frm_001::authentication::login_with_valid_credentials",
+        "frm_013::authentication::login_with_test_credentials",
+        "frm_012::authentication::login_with_performance_glitch_user_credentials",
+        "frm_016::authentication::successful_login_with_standard_user_credentials",
+        "frm_001::authentication::successful_login_with_valid_credentials"
+      ],
+      "hits": 7,
+      "last_used_at": "2026-03-06T03:29:07"
+    }
+  },
+  "updated_at": "2026-03-06T03:29:07"
+}

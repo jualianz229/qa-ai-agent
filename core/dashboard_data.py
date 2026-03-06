@@ -28,7 +28,13 @@ from core.artifacts import (
 from core.confidence import build_historical_confidence_signal, compute_composite_confidence
 from core.feedback_bank import load_run_feedback
 from core.site_profiles import load_knowledge_bank_snapshot
-from core.utils import parse_iso_datetime, load_json_file, atomic_write_json
+from core.utils import (
+    parse_iso_datetime, 
+    load_json_file, 
+    atomic_write_json,
+    is_automation_run,
+    is_automation_or_recovery_run
+)
 
 
 def list_runs(results_dir: str | Path | None = None) -> list[dict]:
@@ -386,7 +392,10 @@ def build_knowledge_snapshot(url: str = "", profiles_dir: str | Path | None = No
     }
 
 
-def build_run_comparison(left_run: str | Path, right_run: str | Path, results_dir: str | Path = "Result") -> dict:
+def build_run_comparison(left_run: str | Path, right_run: str | Path, results_dir: str | Path | None = None) -> dict:
+    from core.config import RESULT_DIR
+    if results_dir is None:
+        results_dir = RESULT_DIR
     left_path = Path(left_run)
     right_path = Path(right_run)
     if not left_path.exists():
@@ -484,8 +493,11 @@ def build_run_comparison(left_run: str | Path, right_run: str | Path, results_di
     }
 
 
-def build_benchmark_snapshot(results_dir: str | Path = "Result", limit: int = 8) -> dict:
+def build_benchmark_snapshot(results_dir: str | Path | None = None, limit: int = 8) -> dict:
+    from core.config import RESULT_DIR
     from core.benchmark import BenchmarkCase, run_benchmark_suite
+    if results_dir is None:
+        results_dir = RESULT_DIR
 
     empty_snapshot = {
         "total_cases": 0,
@@ -560,7 +572,10 @@ def build_benchmark_snapshot(results_dir: str | Path = "Result", limit: int = 8)
     }
 
 
-def build_triage_inbox(results_dir: str | Path = "Result", limit: int = 12) -> dict:
+def build_triage_inbox(results_dir: str | Path | None = None, limit: int = 12) -> dict:
+    from core.config import RESULT_DIR
+    if results_dir is None:
+        results_dir = RESULT_DIR
     rows = list_runs(results_dir)
     candidates = [
         item
@@ -614,7 +629,10 @@ def build_triage_inbox(results_dir: str | Path = "Result", limit: int = 12) -> d
     }
 
 
-def build_ai_safety_audit(results_dir: str | Path = "Result", limit: int = 30) -> dict:
+def build_ai_safety_audit(results_dir: str | Path | None = None, limit: int = 30) -> dict:
+    from core.config import RESULT_DIR
+    if results_dir is None:
+        results_dir = RESULT_DIR
     rows = list_runs(results_dir)[: max(1, int(limit or 1))]
     if not rows:
         return {
@@ -1250,7 +1268,10 @@ def _build_knowledge_heatmap(snapshot: dict) -> list[dict]:
     return top
 
 
-def safe_run_artifact(run_name: str, relative_path: str, results_dir: str | Path = "Result") -> Path:
+def safe_run_artifact(run_name: str, relative_path: str, results_dir: str | Path | None = None) -> Path:
+    from core.config import RESULT_DIR
+    if results_dir is None:
+        results_dir = RESULT_DIR
     run_dir = Path(results_dir) / run_name
     candidate = (run_dir / relative_path).resolve()
     if run_dir.resolve() not in candidate.parents and candidate != run_dir.resolve():
@@ -1770,7 +1791,9 @@ def dashboard_metrics() -> dict:
         trend_passed.append(counts.get("passed", 0))
         trend_failed.append(counts.get("failed", 0))
 
+    # Return flat keys (runs, videos, average_safety_index, etc.) so templates can use metrics.runs directly
     return {
+        **totals,
         "totals": totals,
         "modes_dist": sorted_modes,
         "trend_labels": trend_labels,

@@ -78,7 +78,32 @@ endblock %}
     const inlineJobs = document.getElementById("vrt-inline-jobs");
     const refreshQueueButton = document.getElementById("vrt-refresh-queue");
     const submitButton = vrtJobForm?.querySelector('button[type="submit"]');
+    const vrtCrawlLimit = document.getElementById("vrt-crawl-limit");
+    const vrtUseAuth = document.getElementById("vrt-use-auth");
+    const pageStateKey = "tracepilot.vrt.pageState";
     let isSubmitting = false;
+
+    function saveVrtPageState() {
+      try {
+        const payload = {
+          url: vrtUrlInput?.value || "",
+          crawl_limit: vrtCrawlLimit?.value || "1",
+          use_auth: vrtUseAuth?.value || "no",
+        };
+        window.sessionStorage.setItem(pageStateKey, JSON.stringify(payload));
+      } catch (_e) {}
+    }
+
+    function loadVrtPageState() {
+      try {
+        const raw = window.sessionStorage.getItem(pageStateKey);
+        if (!raw) return;
+        const payload = JSON.parse(raw);
+        if (vrtUrlInput && payload?.url) vrtUrlInput.value = String(payload.url);
+        if (vrtCrawlLimit && payload?.crawl_limit) vrtCrawlLimit.value = String(payload.crawl_limit);
+        if (vrtUseAuth && payload?.use_auth) vrtUseAuth.value = String(payload.use_auth);
+      } catch (_e) {}
+    }
 
     function validateVrtUrl(raw) {
       const value = String(raw || "").trim();
@@ -189,13 +214,20 @@ endblock %}
           return status === "queued" || status === "running";
         });
         renderInlineJobs(activeJobs);
+        if (activeJobs.length > 0 && inlineQueuePanel) {
+          inlineQueuePanel.classList.remove("hidden-panel");
+        }
       } catch (error) {
         inlineJobs.innerHTML = `<p class="empty-state">${error.message || "Failed to load queue."}</p>`;
       }
     }
 
-    vrtUrlInput?.addEventListener("input", updateVrtUrlValidation);
+    loadVrtPageState();
+    vrtUrlInput?.addEventListener("input", () => { updateVrtUrlValidation(); saveVrtPageState(); });
+    vrtCrawlLimit?.addEventListener("change", saveVrtPageState);
+    vrtUseAuth?.addEventListener("change", saveVrtPageState);
     updateVrtUrlValidation();
+    refreshInlineQueue();
 
     vrtJobForm?.addEventListener("submit", async (event) => {
       event.preventDefault();

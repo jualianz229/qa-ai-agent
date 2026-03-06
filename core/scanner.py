@@ -18,6 +18,7 @@ from core.artifacts import (
     visual_regression_approval_path,
     visual_regression_path,
 )
+from core.config import AUTH_DIR, RESULT_DIR
 from core.site_profiles import load_site_profile
 from core.utils import atomic_write_json
 
@@ -36,14 +37,16 @@ DEFAULT_IGNORE_SELECTORS = [
 
 
 class Scanner:
-    def __init__(self, reports_dir: str = "Result"):
+    def __init__(self, reports_dir: str | Path | None = None):
+        if reports_dir is None:
+            reports_dir = RESULT_DIR
         self.reports_dir = Path(reports_dir)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
     def _build_run_context(self, url: str, run_name: str | None = None) -> tuple[str, str, Path]:
         domain = urlparse(url).netloc.replace("www.", "") or "unknown"
         safe_domain = re.sub(r"[^\w]", "_", domain).lower()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%d%m%y_%H%M")
         if not run_name:
             return safe_domain, timestamp, self.reports_dir / f"{safe_domain}_{timestamp}"
 
@@ -68,16 +71,13 @@ class Scanner:
         domain = urlparse(url).netloc.replace("www.", "") or "unknown"
         site_profile = site_profile or load_site_profile(url)
 
-        console.print(f"[dim]  Membuka browser Playwright ke {url}...[/dim]")
-        console.print(f"[dim]  Folder output: {run_dir}[/dim]")
-
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             context_kwargs = {
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "viewport": {"width": 1280, "height": 720},
             }
-            auth_file = Path("auth") / "auth_state.json"
+            auth_file = AUTH_DIR / "auth_state.json"
             if use_auth and auth_file.exists():
                 console.print(f"[green]  Menggunakan bypass login ({auth_file})[/green]")
                 context_kwargs["storage_state"] = str(auth_file)
@@ -85,6 +85,7 @@ class Scanner:
                 console.print(f"[yellow]  Auth file not found at {auth_file}. Continuing without session bypass.[/yellow]")
 
             context = browser.new_context(**context_kwargs)
+            seen_urls = {url.rstrip("/")}
             try:
                 root_info, _, _ = self._scan_single_page(context, url, safe_domain, allow_spider=True, run_dir=run_dir)
                 root_info["site_profile"] = site_profile
@@ -92,13 +93,14 @@ class Scanner:
                 crawled_pages = []
                 root_info["crawl_selection"] = candidates
                 for index, candidate in enumerate(candidates, start=1):
-                    console.print(
-                        f"[dim]  Mini-crawl [{index}/{len(candidates)}]: {candidate.get('url', '')}"
-                        f" | reason: {', '.join(candidate.get('reasons', [])[:3])}[/dim]"
-                    )
+                    c_url = candidate.get("url", "").rstrip("/")
+                    if c_url in seen_urls:
+                        continue
+                    seen_urls.add(c_url)
+                    
                     child_info, _, _ = self._scan_single_page(
                         context,
-                        candidate.get("url", ""),
+                        c_url,
                         f"{safe_domain}_{index}",
                         allow_spider=False,
                         run_dir=run_dir,

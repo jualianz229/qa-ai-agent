@@ -20,8 +20,7 @@
                 <select name="left" required>
                     <option value="">Select baseline</option>
                     {% for run in runs %}
-                    <option value="{{ run.run_name }}" {% if left==run.run_name %}selected{% endif %}>{{
-                        run.run_name[:30] }}...</option>
+                    <option value="{{ run.get('run_name', '') }}" {% if left==run.get('run_name', '') %}selected{% endif %}>{{ (run.get('run_name') or '')[:30] }}...</option>
                     {% endfor %}
                 </select>
             </label>
@@ -30,8 +29,7 @@
                 <select name="right" required>
                     <option value="">Select target</option>
                     {% for run in runs %}
-                    <option value="{{ run.run_name }}" {% if right==run.run_name %}selected{% endif %}>{{
-                        run.run_name[:30] }}...</option>
+                    <option value="{{ run.get('run_name', '') }}" {% if right==run.get('run_name', '') %}selected{% endif %}>{{ (run.get('run_name') or '')[:30] }}...</option>
                     {% endfor %}
                 </select>
             </label>
@@ -43,19 +41,19 @@
     <div class="stats-grid" style="margin-top: 2rem;">
         <div class="stat-card">
             <div class="stat-label">Shared Cases</div>
-            <div class="stat-value">{{ comparison.shared_cases|length }}</div>
+            <div class="stat-value">{{ (comparison.get('shared_cases') or [])|length }}</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">Status Changes</div>
-            <div class="stat-value warning">{{ comparison.status_diffs|length }}</div>
+            <div class="stat-value warning">{{ (comparison.get('status_diffs') or [])|length }}</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">New in Left</div>
-            <div class="stat-value highlight">{{ comparison.only_left|length }}</div>
+            <div class="stat-value highlight">{{ (comparison.get('only_left') or [])|length }}</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">New in Right</div>
-            <div class="stat-value highlight">{{ comparison.only_right|length }}</div>
+            <div class="stat-value highlight">{{ (comparison.get('only_right') or [])|length }}</div>
         </div>
     </div>
 
@@ -75,17 +73,17 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {% for item in comparison.status_diffs %}
+                        {% for item in (comparison.get('status_diffs') or []) %}
                         <tr>
-                            <td><strong>{{ item.id }}</strong><br><small>{{ item.title[:50] }}...</small></td>
-                            <td><span class="badge badge-{{ item.left_status }}">{{ item.left_status|upper }}</span>
+                            <td><strong>{{ item.get('id', '') }}</strong><br><small>{{ (item.get('title') or '')[:50] }}...</small></td>
+                            <td><span class="badge badge-{{ item.get('left_status', '') }}">{{ (item.get('left_status') or '')|upper }}</span>
                             </td>
-                            <td><span class="badge badge-{{ item.right_status }}">{{ item.right_status|upper }}</span>
+                            <td><span class="badge badge-{{ item.get('right_status', '') }}">{{ (item.get('right_status') or '')|upper }}</span>
                             </td>
                             <td>
-                                {% if item.left_status == 'passed' and item.right_status == 'failed' %}
+                                {% if item.get('left_status') == 'passed' and item.get('right_status') == 'failed' %}
                                 <span class="badge badge-failed">REGRESSION</span>
-                                {% elif item.left_status == 'failed' and item.right_status == 'passed' %}
+                                {% elif item.get('left_status') == 'failed' and item.get('right_status') == 'passed' %}
                                 <span class="badge badge-success">FIXED</span>
                                 {% else %}
                                 <span class="badge">CHANGED</span>
@@ -100,7 +98,7 @@
     </div>
     {% else %}
     <div class="empty-state" style="padding: 4rem; text-align: center;">
-        <i data-lucide="comparison" style="width: 48px; height: 48px; opacity: 0.2;"></i>
+        <span class="icon" style="font-size: 3rem; opacity: 0.3;">📊</span>
         <p>Select two runs above to see detailed differences in test results and history tracking.</p>
     </div>
     {% endif %}

@@ -19,51 +19,50 @@ endblock %}
     </div>
   </div>
   <div class="run-grid">
-    {% for run in focus_runs %}
+    {% for run in (focus_runs or []) %}
     <article class="run-card run-card-featured">
       <div class="run-card-top">
-        <span class="run-name">{{ run.run_name }}</span>
-        <span class="badge {% if run.vrt_change_count %}badge-skipped{% else %}badge-passed{% endif %}">
-          {{ run.vrt_change_count or 0 }} changed
+        <span class="run-name">{{ run.get('run_name', '') }}</span>
+        <span class="badge {% if run.get('vrt_change_count', 0) %}badge-skipped{% else %}badge-passed{% endif %}">
+          {{ run.get('vrt_change_count', 0) }} changed
         </span>
       </div>
-      <h3>{{ run.title or run.run_name }}</h3>
-      <p>{{ run.url or "-" }}</p>
+      <h3>{{ run.get('title') or run.get('run_name', '') }}</h3>
+      <p>{{ run.get('url') or "-" }}</p>
       <dl class="mini-stats">
         <div>
           <dt>Text</dt>
-          <dd>{{ run.vrt_summary.text_change_count or 0 }}</dd>
+          <dd>{{ (run.get('vrt_summary') or {}).get('text_change_count', 0) }}</dd>
         </div>
         <div>
           <dt>Style</dt>
-          <dd>{{ run.vrt_summary.style_change_count or 0 }}</dd>
+          <dd>{{ (run.get('vrt_summary') or {}).get('style_change_count', 0) }}</dd>
         </div>
         <div>
           <dt>Layout</dt>
-          <dd>{{ run.vrt_summary.layout_change_count or 0 }}</dd>
+          <dd>{{ (run.get('vrt_summary') or {}).get('layout_change_count', 0) }}</dd>
         </div>
         <div>
           <dt>Baseline</dt>
-          <dd>{{ run.vrt_baseline_run or "-" }}</dd>
+          <dd>{{ run.get('vrt_baseline_run') or "-" }}</dd>
         </div>
         <div>
           <dt>Visual status</dt>
-          <dd>{{ run.visual_regression_status or "-" }}</dd>
+          <dd>{{ run.get('visual_regression_status') or "-" }}</dd>
         </div>
         <div>
           <dt>Pixel diff</dt>
-          <dd>{{ ((run.visual_regression_ratio or 0) * 100)|round(3) }}%</dd>
+          <dd>{{ ((run.get('visual_regression_ratio') or 0) * 100)|round(3) }}%</dd>
         </div>
         <div>
           <dt>Approval</dt>
-          <dd>{{ run.visual_regression_approval_status or "pending" }}</dd>
+          <dd>{{ run.get('visual_regression_approval_status') or "pending" }}</dd>
         </div>
       </dl>
       <div class="artifact-groups">
-        <a class="artifact-link" href="{{ url_for('vrt_monitor_page', run_name=run.run_name) }}">Open Diff
-          Monitor</a>
-        <a class="artifact-link" href="{{ url_for('run_visual_diff_api', run_name=run.run_name) }}">Open Visual Diff API</a>
-        <a class="artifact-link" href="{{ url_for('run_detail', run_name=run.run_name) }}">Open run detail</a>
+        <a class="artifact-link" href="{{ url_for('visual_regression_testing.vrt_monitor_page', run_name=run.get('run_name', '')) }}">Open Diff Monitor</a>
+        <a class="artifact-link" href="{{ url_for('visual_regression_testing.run_visual_diff_api', run_name=run.get('run_name', '')) }}">Open Visual Diff API</a>
+        <a class="artifact-link" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">Open run detail</a>
       </div>
     </article>
     {% else %}

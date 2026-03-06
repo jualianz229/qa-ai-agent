@@ -21,8 +21,7 @@ endblock %}
       <select id="vrt-diff-run-select">
         <option value="">Select run</option>
         {% for run in runs %}
-        <option value="{{ run.run_name }}" {% if selected_run_name and selected_run_name==run.run_name %}selected{%
-          endif %}>{{ run.run_name }} ({{ run.vrt_change_count or 0 }} changed)</option>
+        <option value="{{ run.get('run_name', '') }}" {% if selected_run_name and selected_run_name==run.get('run_name', '') %}selected{% endif %}>{{ run.get('run_name', '') }} ({{ run.get('vrt_change_count', 0) }} changed)</option>
         {% endfor %}
       </select>
     </label>

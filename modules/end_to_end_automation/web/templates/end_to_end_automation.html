@@ -20,8 +20,7 @@
       <select id="automation-source-run" name="source_run_name" required>
         <option value="">Select test case run</option>
         {% for run in runs %}
-        <option value="{{ run.run_name }}" {% if source_run_name and source_run_name==run.run_name %}selected{% endif
-          %}>{{ run.run_name }} ({{ run.total_cases }} cases)</option>
+        <option value="{{ run.get('run_name', '') }}" {% if source_run_name and source_run_name==run.get('run_name', '') %}selected{% endif %}>{{ run.get('run_name', '') }} ({{ run.get('total_cases', 0) }} cases)</option>
         {% endfor %}
       </select>
     </div>
@@ -145,6 +144,8 @@
     let currentAutomationJobId = "";
     let inlineQueueTimer = 0;
     const loginDraftStorageKey = "tracepilot.automation.injectLoginDraft.v1";
+    const pageStateKey = "tracepilot.e2e.pageState";
+    const jobIdStorageKey = "tracepilot.e2e.currentJobId";
     let currentCaseRows = [];
     const loginTemplates = {
       standard_login: `Use a standard username/password login before executing the selected test cases.
@@ -265,6 +266,28 @@ Example:
       });
     }
 
+    function savePageState() {
+      try {
+        const payload = {
+          source_run: sourceRun?.value || "",
+          case_mode: caseMode?.value || "all",
+          case_ids: caseIdsTextarea?.value || "",
+        };
+        window.sessionStorage.setItem(pageStateKey, JSON.stringify(payload));
+      } catch (_e) {}
+    }
+
+    function loadPageState() {
+      try {
+        const raw = window.sessionStorage.getItem(pageStateKey);
+        if (!raw) return;
+        const payload = JSON.parse(raw);
+        if (sourceRun && payload?.source_run) sourceRun.value = String(payload.source_run);
+        if (caseMode && payload?.case_mode) caseMode.value = String(payload.case_mode);
+        if (caseIdsTextarea && payload?.case_ids) caseIdsTextarea.value = String(payload.case_ids);
+      } catch (_e) {}
+    }
+
     async function refreshInlineQueue() {
       if (!inlineJobs) return;
       try {
@@ -294,7 +317,11 @@ Example:
         if (!stillRunning && currentAutomationJobId) {
           window.clearInterval(inlineQueueTimer);
           inlineQueueTimer = 0;
+          try { window.sessionStorage.removeItem(jobIdStorageKey); } catch (_e) {}
           status.textContent = currentState === "failed" ? "Automation run failed. Check queue log." : "Automation run finished.";
+        }
+        if (visibleJobs.length > 0 && inlineQueuePanel) {
+          inlineQueuePanel.classList.remove("hidden-panel");
         }
       } catch (error) {
         inlineJobs.innerHTML = `<p class="empty-state">${error.message || "Failed to load queue."}</p>`;
@@ -424,11 +451,15 @@ Example:
           casePreview.appendChild(badge);
         });
         caseTableBody.innerHTML = "";
+        const selectedIdsStr = String(caseIdsTextarea?.value || "").replace(/\n/g, ",");
+        const selectedIdsSet = new Set(selectedIdsStr.split(",").map((s) => s.trim()).filter(Boolean));
         rows.forEach((item) => {
           const row = document.createElement("tr");
+          const id = item.id || "";
+          const checked = caseMode?.value === "selected" && selectedIdsSet.has(String(id));
           row.innerHTML = `
-            <td><input type="checkbox" class="automation-case-check" value="${item.id || ""}" name="selected_case_ids[]"></td>
-            <td>${item.id || "-"}</td>
+            <td><input type="checkbox" class="automation-case-check" value="${id}" name="selected_case_ids[]" ${checked ? "checked" : ""}></td>
+            <td>${id || "-"}</td>
             <td>${item.title || "-"}</td>
             <td>${item.status || "-"}</td>
             <td>${item.priority || "-"}</td>
@@ -451,13 +482,16 @@ Example:
       updateEstimatedCaseCount();
     }
 
-    caseMode?.addEventListener("change", updateCaseMode);
-    sourceRun?.addEventListener("change", refreshCasePreview);
-    caseIdsTextarea?.addEventListener("input", updateEstimatedCaseCount);
+    caseMode?.addEventListener("change", () => { updateCaseMode(); savePageState(); });
+    sourceRun?.addEventListener("change", () => { refreshCasePreview(); savePageState(); });
+    caseIdsTextarea?.addEventListener("input", () => { updateEstimatedCaseCount(); savePageState(); });
     caseTableBody?.addEventListener("change", (event) => {
       const target = event.target;
       if (target instanceof HTMLInputElement && target.classList.contains("automation-case-check")) {
         updateEstimatedCaseCount();
+        const selectedIds = Array.from(document.querySelectorAll(".automation-case-check:checked")).map((n) => n.value).filter(Boolean);
+        if (caseIdsTextarea) caseIdsTextarea.value = selectedIds.join(", ");
+        savePageState();
       }
     });
     loginTemplateSelect?.addEventListener("change", () => {
@@ -471,6 +505,8 @@ Example:
       syncInjectLoginValue();
       saveLoginDraft();
     });
+    try { currentAutomationJobId = String(sessionStorage.getItem(jobIdStorageKey) || ""); } catch (_e) {}
+    loadPageState();
     const restoredLoginDraft = restoreLoginDraft();
     updateCaseMode();
     loadInjectLoginTemplate(loginTemplateSelect?.value || "");
@@ -484,6 +520,9 @@ Example:
     if (sourceRun?.value) {
       refreshCasePreview();
     }
+    refreshInlineQueue().then(() => {
+      startInlineQueuePolling();
+    });
 
     form?.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -517,6 +556,7 @@ Example:
           throw new Error(payload.error || "Failed to generate automation.");
         }
         currentAutomationJobId = String(payload?.job?.id || "");
+        try { window.sessionStorage.setItem(jobIdStorageKey, currentAutomationJobId); } catch (_e) {}
         status.textContent = `Automation job is running: ${payload.job.run_name}`;
         if (inlineQueuePanel) {
           inlineQueuePanel.classList.remove("hidden-panel");

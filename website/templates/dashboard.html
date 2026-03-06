@@ -1,63 +1,61 @@
 {% extends 'base.html' %}
 
-{% block title %}TracePilot | Dashboard{% endblock %}
+{% block title %}TracePilot – Overview{% endblock %}
 
 {% block header_kicker %}Overview{% endblock %}
-{% block header_title %}TracePilot Dashboard{% endblock %}
-{% block header_subtitle %}Automated QA Agent Monitoring & Control Center{% endblock %}
+{% block header_title %}Dashboard{% endblock %}
+{% block header_subtitle %}View test scenario summary, running jobs, and latest results.{% endblock %}
 
 {% block content %}
 <div class="stats-grid">
     <div class="stat-card">
         <div class="stat-label">Total Runs</div>
-        <div class="stat-value">{{ metrics.runs }}</div>
-        <div class="stat-sub">{{ metrics.scenario_runs }} Scenarios, {{ metrics.automation_runs }} Automation</div>
+        <div class="stat-value">{{ metrics.get('runs', 0) }}</div>
+        <div class="stat-sub">{{ metrics.get('scenario_runs', 0) }} scenarios, {{ metrics.get('automation_runs', 0) }} automation</div>
     </div>
     <div class="stat-card">
         <div class="stat-label">Failed Cases</div>
         <div class="stat-value danger">{{ metrics.get('failed', 0) }}</div>
-        <div class="stat-sub">Across all execution runs</div>
+        <div class="stat-sub">Failed across all runs</div>
     </div>
     <div class="stat-card">
         <div class="stat-label">Safety Index</div>
-        <div class="stat-value warning">{{ metrics.average_safety_index }}%</div>
+        <div class="stat-value warning">{{ metrics.get('average_safety_index', 0) }}%</div>
         <div class="stat-sub">AI output reliability score</div>
     </div>
     <div class="stat-card">
         <div class="stat-label">Evidence Captured</div>
-        <div class="stat-value highlight">{{ metrics.videos }}</div>
-        <div class="stat-sub">Video recordings and logs</div>
+        <div class="stat-value highlight">{{ metrics.get('videos', 0) }}</div>
+        <div class="stat-sub">Videos and logs</div>
     </div>
 </div>
 
 <div class="dashboard-grid">
-    <!-- Active Jobs -->
-    <section class="dashboard-section card glass">
+    <section class="dashboard-section card">
         <div class="section-header">
-            <h3><i data-lucide="cpu"></i> Active Jobs</h3>
+            <h3><span class="icon">⏳</span> Active Jobs</h3>
         </div>
         <div class="job-list">
             {% for job in active_jobs %}
             <div class="job-item">
                 <div class="job-info">
-                    <span class="job-name">{{ job.payload.url[:30] }}...</span>
-                    <span class="job-status status-{{ job.status }}">{{ job.status }}</span>
+                    <span class="job-name">{{ ((job.payload or {}).get('url') or 'Run')[:30] }}...</span>
+                    <span class="job-status status-{{ job.status or 'queued' }}">{{ job.status or 'queued' }}</span>
                 </div>
                 <div class="progress-bar">
-                    <div class="progress-fill" style="width: {{ job.progress }}%"></div>
+                    <div class="progress-fill" style="width: {{ job.get('progress', 100) }}%"></div>
                 </div>
             </div>
             {% else %}
-            <p class="empty-msg">No active jobs found.</p>
+            <p class="empty-msg">No active jobs yet.</p>
             {% endfor %}
         </div>
     </section>
 
-    <!-- Recent Runs -->
-    <section class="dashboard-section card glass">
+    <section class="dashboard-section card">
         <div class="section-header">
-            <h3><i data-lucide="history"></i> Recent Execution Runs</h3>
-            <a href="/automation-results" class="view-all">View All</a>
+            <h3><span class="icon">📋</span> Recent Execution Runs</h3>
+            <a href="{{ url_for('end_to_end_automation.automation_results_page') }}" class="view-all">View all</a>
         </div>
         <table class="table-minimal">
             <thead>
@@ -70,54 +68,52 @@
             <tbody>
                 {% for run in runs[:5] %}
                 <tr>
-                    <td><a href="/runs/{{ run.run_name }}">{{ run.run_name[:15] }}...</a></td>
+                    <td><a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">{{ (run.get('run_name') or '')[:15] }}...</a></td>
                     <td>
                         <span
-                            class="badge {% if run.status_counts.get('failed', 0) > 0 %}badge-danger{% else %}badge-success{% endif %}">
-                            {{ "FAILED" if run.status_counts.get('failed', 0) > 0 else "PASSED" }}
+                            class="badge {% if (run.status_counts or {}).get('failed', 0) > 0 %}badge-danger{% else %}badge-success{% endif %}">
+                            {{ "FAILED" if (run.status_counts or {}).get('failed', 0) > 0 else "PASSED" }}
                         </span>
                     </td>
-                    <td>{{ run.total_cases }}</td>
+                    <td>{{ run.get('total_cases', 0) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </section>
 
-    <!-- Knowledge Bank Snapshot -->
-    <section class="dashboard-section card glass">
+    <section class="dashboard-section card">
         <div class="section-header">
-            <h3><i data-lucide="database"></i> Knowledge Snapshot</h3>
+            <h3><span class="icon">📚</span> Knowledge Snapshot</h3>
         </div>
         <div class="knowledge-stats">
             <div class="k-stat">
                 <span class="k-label">Profiles</span>
-                <span class="k-value">{{ knowledge_snapshot.total_profiles }}</span>
+                <span class="k-value">{{ knowledge_snapshot.get('total_profiles', 0) }}</span>
             </div>
             <div class="k-stat">
                 <span class="k-label">Learned Patterns</span>
-                <span class="k-value">{{ knowledge_snapshot.total_patterns }}</span>
+                <span class="k-value">{{ knowledge_snapshot.get('total_patterns', 0) }}</span>
             </div>
         </div>
         <div class="tag-cloud">
-            {% for cluster in knowledge_snapshot.top_clusters[:12] %}
+            {% for cluster in (knowledge_snapshot.get('top_clusters') or [])[:12] %}
             <span class="tag">{{ cluster }}</span>
             {% endfor %}
         </div>
     </section>
 
-    <!-- High Risk Runs -->
-    <section class="dashboard-section card glass">
+    <section class="dashboard-section card">
         <div class="section-header">
-            <h3><i data-lucide="alert-triangle"></i> Reliability Risks</h3>
+            <h3><span class="icon">⚠️</span> Reliability Risks</h3>
         </div>
         <div class="risk-list">
             {% for run in risk_runs[:4] %}
             <div class="risk-item">
                 <div class="risk-icon danger">!</div>
                 <div class="risk-content">
-                    <p class="risk-title">{{ run.run_name }}</p>
-                    <p class="risk-meta">Safety Index: {{ run.safety_index }}% | Alerts: {{ run.alert_count }}</p>
+                    <p class="risk-title">{{ run.get('run_name', '') }}</p>
+                    <p class="risk-meta">Safety index: {{ run.get('safety_index', 0) }}% · Alerts: {{ run.get('alert_count', 0) }}</p>
                 </div>
             </div>
             {% endfor %}

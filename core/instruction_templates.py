@@ -3,8 +3,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-
-INSTRUCTIONS_DIR = Path("instructions")
+from core.config import INSTRUCTIONS_DIR
 TEMPLATE_NOTES_FILENAME = ".template_user_notes.json"
 
 DEFAULT_TEMPLATES = {

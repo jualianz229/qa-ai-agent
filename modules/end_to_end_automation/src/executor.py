@@ -22,7 +22,7 @@ class CodeGenerator:
             self._render_runner(execution_plan_path.name, plan.get("base_url", ""), headless),
             encoding="utf-8",
         )
-        console.print(f"[green]  [OK] Action runner digenerate: {script_file}[/green]")
+        console.print(f"[green]  [OK] Action runner generated: {script_file}[/green]")
         return script_file
 
     def _render_runner(self, plan_filename: str, default_url: str, headless: bool) -> str:
@@ -43,7 +43,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 RUN_DIR = Path(__file__).resolve().parents[1]
 VIDEO_DIR = RUN_DIR / "Evidence" / "Video"
 JSON_DIR = RUN_DIR / "JSON"
-AUTH_FILE = ROOT_DIR / "auth" / "auth_state.json"
+AUTH_FILE = ROOT_DIR / "configs" / "auth" / "auth_state.json"
 EXECUTION_PLAN_FILE = JSON_DIR / "{plan_filename}"
 RESULT_FILE = JSON_DIR / "Execution_Results.json"
 DEBUG_FILE = JSON_DIR / "Execution_Debug.json"
@@ -1169,7 +1169,7 @@ def run_tests():
                     results.append({{"id": test_id, "title": plan.get("title", ""), "status": "skipped", "error": "", "automation": automation}})
                     continue
                 if session_strategy.get("requires_session") and not storage_state:
-                    message = "Authenticated session required. Provide auth/auth_state.json or site-profile storage state."
+                    message = "Authenticated session required. Provide configs/auth/auth_state.json or site-profile storage state."
                     safe_print(f"  [Checkpoint] {{test_id}} requires session: {{message}}")
                     results.append({{"id": test_id, "title": plan.get("title", ""), "status": "checkpoint_required", "error": message, "automation": automation}})
                     checkpoint_entries.append({{"id": test_id, "type": "session", "mode": "manual", "reason": message}})

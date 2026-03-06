@@ -11,8 +11,8 @@
       <h1>Automation Results</h1>
     </div>
     <div class="metric-inline">
-      <span>{{ metrics.automation_runs or 0 }} automation runs</span>
-      <span>{{ metrics.runs }} total runs</span>
+      <span>{{ metrics.get('automation_runs', 0) }} automation runs</span>
+      <span>{{ metrics.get('runs', 0) }} total runs</span>
     </div>
   </div>
   <form class="filter-toolbar" action="{{ url_for('end_to_end_automation.automation_results_page') }}" method="get">
@@ -42,18 +42,18 @@
       <tbody>
         {% for run in runs %}
         <tr>
-          <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.run_name) }}">{{ run.run_name }}</a>
+          <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">{{ run.get('run_name', '') }}</a>
           </td>
-          <td>{{ run.page_type or "-" }}</td>
-          <td>{{ run.total_cases }}</td>
-          <td>{{ run.status_counts.passed or 0 }}</td>
-          <td>{{ run.status_counts.failed or 0 }}</td>
-          <td>{{ run.video_count }}</td>
-          <td><span class="confidence">{{ run.confidence_score }}</span></td>
+          <td>{{ run.get('page_type') or "-" }}</td>
+          <td>{{ run.get('total_cases', 0) }}</td>
+          <td>{{ (run.status_counts or {}).get('passed', 0) }}</td>
+          <td>{{ (run.status_counts or {}).get('failed', 0) }}</td>
+          <td>{{ run.get('video_count', 0) }}</td>
+          <td><span class="confidence">{{ run.get('confidence_score', 0) }}</span></td>
           <td>
             <span
-              class="badge {% if run.safety_status == 'critical' %}badge-failed{% elif run.safety_status == 'warning' %}badge-skipped{% else %}badge-passed{% endif %}">
-              {{ run.safety_index or 0 }}/100
+              class="badge {% if run.get('safety_status') == 'critical' %}badge-failed{% elif run.get('safety_status') == 'warning' %}badge-skipped{% else %}badge-passed{% endif %}">
+              {{ run.get('safety_index', 0) }}/100
             </span>
           </td>
         </tr>

@@ -1,0 +1,126 @@
+{
+  "patterns": {
+    "authentication_form::authentication::positive": {
+      "pattern_key": "authentication_form::authentication::positive",
+      "page_type": "authentication_form",
+      "module": "authentication",
+      "category": "Login",
+      "test_type": "Positive",
+      "automation_counts": {
+        "auto": 9
+      },
+      "step_profiles": {
+        "open_url > fill > fill > click": 9
+      },
+      "expected_profiles": {
+        "url_change": 9
+      },
+      "example_titles": [
+        "Login with performance_glitch_user",
+        "Login with valid credentials",
+        "Successful Login - standard_user",
+        "Successful Login - test_user",
+        "Successful Login - performance_glitch_user"
+      ],
+      "signatures": [
+        "frm_014::authentication::login_with_performance_glitch_user",
+        "frm_001::authentication::login_with_valid_credentials",
+        "frm_016::authentication::login_with_valid_credentials",
+        "frm_001::authentication::successful_login_standard_user",
+        "frm_012::authentication::successful_login_test_user",
+        "frm_009::authentication::successful_login_performance_glitch_user",
+        "frm_015::authentication::successful_login_test_user",
+        "frm_007::authentication::successful_login_performance_glitch_user"
+      ],
+      "hits": 9,
+      "last_used_at": "2026-03-06T03:49:32"
+    },
+    "authentication_form::authentication::negative": {
+      "pattern_key": "authentication_form::authentication::negative",
+      "page_type": "authentication_form",
+      "module": "authentication",
+      "category": "Login",
+      "test_type": "Negative",
+      "automation_counts": {
+        "auto": 20
+      },
+      "step_profiles": {
+        "open_url > fill > fill > click": 17,
+        "open_url > inspect > fill > click": 1,
+        "open_url > fill > inspect > click": 1,
+        "open_url > inspect > inspect > click": 1
+      },
+      "expected_profiles": {
+        "text_visible": 20
+      },
+      "example_titles": [
+        "Login with valid username and invalid password",
+        "Login with invalid username and valid password",
+        "Login Failure - Both Username and Password Invalid",
+        "Login Failure - Invalid Password",
+        "Login Failure - Invalid Username",
+        "Password Field - Special Characters"
+      ],
+      "signatures": [
+        "frm_016::authentication::login_with_valid_username_and_invalid_password",
+        "frm_015::authentication::login_with_invalid_username_and_valid_password",
+        "frm_006::authentication::login_failure_both_username_and_password_invalid",
+        "frm_003::authentication::login_failure_invalid_password",
+        "frm_002::authentication::login_failure_invalid_username",
+        "frm_015::authentication::login_failure_both_username_and_password_invalid",
+        "frm_012::authentication::password_field_special_characters",
+        "frm_011::authentication::username_field_special_characters",
+        "frm_016::authentication::login_with_incorrect_case_username",
+        "frm_006::authentication::login_with_both_fields_empty",
+        "frm_005::authentication::login_with_empty_password",
+        "frm_004::authentication::login_with_empty_username"
+      ],
+      "hits": 20,
+      "last_used_at": "2026-03-06T03:49:32"
+    },
+    "authentication_form::form_validation::negative": {
+      "pattern_key": "authentication_form::form_validation::negative",
+      "page_type": "authentication_form",
+      "module": "form_validation",
+      "category": "Password",
+      "test_type": "Negative",
+      "automation_counts": {
+        "auto": 16
+      },
+      "step_profiles": {
+        "open_url > inspect > fill > click": 2,
+        "open_url > fill > inspect > click": 2,
+        "open_url > fill > fill > click": 12
+      },
+      "expected_profiles": {
+        "text_visible": 14,
+        "generic": 2
+      },
+      "example_titles": [
+        "Password field - Long input",
+        "Username field - Long input",
+        "Password field - Special characters",
+        "Username field - Special characters",
+        "Password field - Leading/Trailing Spaces",
+        "Username field - Leading/Trailing Spaces"
+      ],
+      "signatures": [
+        "frm_010::form_validation::password_field_long_input",
+        "frm_009::form_validation::username_field_long_input",
+        "frm_008::form_validation::password_field_special_characters",
+        "frm_007::form_validation::username_field_special_characters",
+        "frm_013::form_validation::password_field_leading_trailing_spaces",
+        "frm_012::form_validation::username_field_leading_trailing_spaces",
+        "frm_005::form_validation::password_field_empty_input",
+        "frm_004::form_validation::username_field_empty_input",
+        "frm_014::form_validation::password_field_leading_trailing_spaces",
+        "frm_013::form_validation::username_field_leading_trailing_spaces",
+        "frm_011::form_validation::password_field_long_input",
+        "frm_010::form_validation::username_field_long_input"
+      ],
+      "hits": 16,
+      "last_used_at": "2026-03-06T03:49:32"
+    }
+  },
+  "updated_at": "2026-03-06T03:49:32"
+}

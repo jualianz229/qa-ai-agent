@@ -3,35 +3,35 @@
 {% block title %}Run Detail | TracePilot{% endblock %}
 
 {% block header_kicker %}Execution Run{% endblock %}
-{% block header_title %}{{ run.run_name[:20] }}{% if run.run_name|length > 20 %}...{% endif %}{% endblock %}
-{% block header_subtitle %}{{ run.page_type|upper }} run on {{ run.created_at }}{% endblock %}
+{% block header_title %}{{ (run.get('run_name') or '')[:20] }}{% if (run.get('run_name') or '')|length > 20 %}...{% endif %}{% endblock %}
+{% block header_subtitle %}{{ (run.get('page_type') or '')|upper }} run on {{ run.get('created_at', '') }}{% endblock %}
 
 {% block content %}
 <div class="stats-grid">
     <div class="stat-card">
         <div class="stat-label">Total Cases</div>
-        <div class="stat-value">{{ run.total_cases }}</div>
+        <div class="stat-value">{{ run.get('total_cases', 0) }}</div>
     </div>
     <div class="stat-card">
         <div class="stat-label">Passed</div>
-        <div class="stat-value highlight">{{ run.status_counts.passed or 0 }}</div>
+        <div class="stat-value highlight">{{ (run.status_counts or {}).get('passed', 0) }}</div>
     </div>
     <div class="stat-card">
         <div class="stat-label">Failed</div>
-        <div class="stat-value danger">{{ run.status_counts.failed or 0 }}</div>
+        <div class="stat-value danger">{{ (run.status_counts or {}).get('failed', 0) }}</div>
     </div>
     <div class="stat-card">
         <div class="stat-label">Safety Index</div>
         <div
-            class="stat-value {% if run.safety_index < 70 %}danger{% elif run.safety_index < 90 %}warning{% else %}highlight{% endif %}">
-            {{ run.safety_index }}%</div>
+            class="stat-value {% if run.get('safety_index', 0) < 70 %}danger{% elif run.get('safety_index', 0) < 90 %}warning{% else %}highlight{% endif %}">
+            {{ run.get('safety_index', 0) }}%</div>
     </div>
 </div>
 
 <div class="dashboard-grid">
-    <section class="dashboard-section card glass" style="grid-column: span 2;">
+    <section class="dashboard-section card" style="grid-column: span 2;">
         <div class="section-header">
-            <h3><i data-lucide="list"></i> Execution Cases</h3>
+            <h3><span class="icon">📋</span> Execution Cases</h3>
         </div>
         <div class="table-shell">
             <table class="table-minimal">
@@ -45,18 +45,18 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for case in run.case_rows %}
+                    {% for case in (run.get('case_rows') or []) %}
                     <tr>
-                        <td class="mono">{{ case.id }}</td>
-                        <td>{{ case.title }}</td>
+                        <td class="mono">{{ case.get('id', '') }}</td>
+                        <td>{{ case.get('title', '') }}</td>
                         <td>
                             <span
-                                class="badge {% if case.status == 'passed' %}badge-success{% elif case.status == 'failed' %}badge-danger{% else %}badge-warning{% endif %}">
-                                {{ case.status|upper }}
+                                class="badge {% if case.get('status') == 'passed' %}badge-success{% elif case.get('status') == 'failed' %}badge-danger{% else %}badge-warning{% endif %}">
+                                {{ (case.get('status') or '')|upper }}
                             </span>
                         </td>
-                        <td>{{ case.duration }}s</td>
-                        <td>{{ case.traceability_id }}</td>
+                        <td>{{ case.get('duration', 0) }}s</td>
+                        <td>{{ case.get('traceability_id', '') }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -64,31 +64,31 @@
         </div>
     </section>
 
-    {% if run.text_summaries.test_plan_summary or run.text_summaries.execution_summary %}
-    <section class="dashboard-section card glass">
+    {% if (run.get('text_summaries') or {}).get('test_plan_summary') or (run.get('text_summaries') or {}).get('execution_summary') %}
+    <section class="dashboard-section card">
         <div class="section-header">
-            <h3><i data-lucide="file-text"></i> Run Summaries</h3>
+            <h3><span class="icon">📄</span> Run Summaries</h3>
         </div>
         <div class="summary-content">
-            {% if run.text_summaries.test_plan_summary %}
+            {% if (run.get('text_summaries') or {}).get('test_plan_summary') %}
             <h4>Test Plan</h4>
-            <pre class="artifact-text">{{ run.text_summaries.test_plan_summary }}</pre>
+            <pre class="artifact-text">{{ (run.get('text_summaries') or {}).get('test_plan_summary', '') }}</pre>
             {% endif %}
 
-            {% if run.text_summaries.execution_summary %}
+            {% if (run.get('text_summaries') or {}).get('execution_summary') %}
             <h4>Execution Summary</h4>
-            <pre class="artifact-text">{{ run.text_summaries.execution_summary }}</pre>
+            <pre class="artifact-text">{{ (run.get('text_summaries') or {}).get('execution_summary', '') }}</pre>
             {% endif %}
         </div>
     </section>
     {% endif %}
 
-    <section class="dashboard-section card glass">
+    <section class="dashboard-section card">
         <div class="section-header">
-            <h3><i data-lucide="shield-check"></i> Safety Recommendations</h3>
+            <h3><span class="icon">🛡️</span> Safety Recommendations</h3>
         </div>
         <div class="risk-list">
-            {% for rec in run.safety_recommendations %}
+            {% for rec in (run.get('safety_recommendations') or []) %}
             <div class="risk-item">
                 <div class="risk-icon warning">!</div>
                 <div class="risk-content">

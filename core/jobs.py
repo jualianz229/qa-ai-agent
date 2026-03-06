@@ -36,6 +36,9 @@ def get_job(job_id: str) -> dict:
 def get_all_jobs() -> list[dict]:
     with jobs_lock:
         items = [json.loads(json.dumps(job)) for job in jobs.values()]
+    for job in items:
+        status = str(job.get("status", "")).strip().lower()
+        job["progress"] = 100 if status in {"completed", "failed"} else 50
     items.sort(key=lambda item: item["created_at"], reverse=True)
     return items
 
@@ -146,7 +149,7 @@ def generate_run_name(url: str) -> str:
         host = host[:-4]
     safe_domain = re.sub(r"[^\w]", "_", host)
     safe_domain = re.sub(r"_+", "_", safe_domain).strip("_") or "unknown"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%d%m%y_%H%M")
     return f"{safe_domain}_{timestamp}"
 
 

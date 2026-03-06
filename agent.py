@@ -34,26 +34,36 @@ from core.artifacts import (
     json_artifact_path,
     scenario_contract_validation_path,
     token_usage_path,
+    contradiction_analysis_path,
+    anti_hallucination_audit_path,
+    drift_analysis_path,
+    execution_replay_verification_path,
+    policy_pack_report_path,
 )
-from core.case_memory import merge_case_memory
+
+# Moved to modules.test_case_generator
+from modules.test_case_generator.src.case_memory import merge_case_memory
+from modules.test_case_generator.src.planner import build_execution_plan, build_normalized_page_model, save_json_artifact
+from modules.test_case_generator.src.scenario_contract import validate_scenario_contract
+
+# Moved to modules.end_to_end_automation
+from modules.end_to_end_automation.src.executor import CodeGenerator
+from modules.end_to_end_automation.src.flaky_bank import merge_flaky_history
+from modules.end_to_end_automation.src.replay_verifier import verify_plan_execution_consistency
+
+# Moved to modules.visual_regression_testing
+from modules.visual_regression_testing.src.drift_detector import detect_run_drift
+
 from core.confidence import build_historical_confidence_signal, compute_composite_confidence
 from core.contradictions import analyze_cross_stage_contradictions
-from core.drift_detector import detect_run_drift
-from core.executor import CodeGenerator
-from core.flaky_bank import merge_flaky_history
 from core.guardrails import validate_execution_plan
-from core.planner import build_execution_plan, build_normalized_page_model, save_json_artifact
 from core.policy_pack import run_anti_hallucination_policy_pack
-from core.replay_verifier import verify_plan_execution_consistency
 from core.result_analyzer import analyze_execution_results, save_execution_summary
 from core.run_context import merge_recrawl_project_info
 from core.scanner import Scanner
-from core.scenario_contract import validate_scenario_contract
 from core.safety_gates import build_execution_gate_decision
 from core.self_critique import refine_execution_plan_with_self_critique
 from core.site_profiles import enrich_site_profile_with_clusters, load_site_profile, merge_execution_learning
-from core.artifacts import contradiction_analysis_path
-from core.artifacts import anti_hallucination_audit_path, drift_analysis_path, execution_replay_verification_path, policy_pack_report_path
 
 from core.config import INSTRUCTIONS_DIR, AUTH_DIR, RESULT_DIR
 load_dotenv()
@@ -117,6 +127,11 @@ def _build_fallback_scenarios(
     return [_minimal_fallback_case(url)]
 
 
+def _log_usage(engine, label="AI"):
+    usage = engine.usage_snapshot().get("summary", {})
+    tokens = usage.get("estimated_total_tokens", 0)
+    console.print(f"  [dim]Token used: {tokens}[/dim]")
+
 def _coerce_non_empty_scenarios(
     cases: list[dict] | None,
     engine: AIEngine,
@@ -152,10 +167,10 @@ def process_single_url(
     engine.last_scenario_validation = {}
     engine.reset_usage()
 
-    console.print(Rule(f"[bold]Scan Halaman: {url}[/bold]"))
+    console.print(Rule(f"[bold]Scan & Analysis: {url}[/bold]"))
     with console.status(
-        f"[bold yellow]Running a headless browser, scanning the page, and reading relevant internal links from {url}...[/bold yellow]",
-        spinner="dots",
+        f"[bold yellow]AI checking page...[/bold yellow]",
+        spinner="line",
     ):
         project_info, page_info, _ = runner.scan_website(
             url,
@@ -176,6 +191,7 @@ def process_single_url(
             adaptive_recrawl=adaptive_recrawl,
             engine=engine,
         )
+        _log_usage(engine, "Scope Analysis")
         page_model = build_normalized_page_model(page_info)
         site_profile = enrich_site_profile_with_clusters(site_profile, page_model=page_model, page_scope=page_scope)
         page_info["site_profile"] = site_profile
@@ -237,11 +253,12 @@ def process_single_url(
         console.print(f"  [green][OK][/green] Normalized page model disimpan: [dim]{page_model_path}[/dim]")
         console.print(f"  [green][OK][/green] Site profile disimpan: [dim]{site_profile_path}[/dim]")
         if scope_validation_path:
-            console.print(f"  [green][OK][/green] Validasi scope disimpan: [dim]{scope_validation_path}[/dim]")
+            console.print(f"  [green][OK][/green] Scope validation saved: [dim]{scope_validation_path}[/dim]")
 
         console.print(Rule(f"[bold]Generate Test Scenarios (CSV): {url}[/bold]"))
         with console.status(
-            f"[bold green]AI ({engine.current_model}) sedang menyusun test scenario berdasarkan scope halaman...[/bold green]"
+            f"[bold green]AI generating scenarios...[/bold green]",
+            spinner="line",
         ):
             parsed_data = engine.generate_test_scenarios(
                 url=url,
@@ -252,6 +269,7 @@ def process_single_url(
                 custom_instruction=instruction,
                 csv_sep=csv_sep,
             )
+            _log_usage(engine, "Scenario Generation")
             parsed_data = _coerce_non_empty_scenarios(
                 parsed_data,
                 engine,
@@ -303,8 +321,8 @@ def process_single_url(
                     scenario_contract_validation_path(project_info["run_dir"]),
                 )
             saved_csv_path = runner.save_csv_scenarios(parsed_data, project_info, csv_sep)
-            console.print(f"  [green][OK][/green] CSV berhasil dibuat: [dim]{saved_csv_path}[/dim]")
-            console.print(f"  [green][OK][/green] Scenario contract validation disimpan: [dim]{scenario_contract_path}[/dim]")
+            console.print(f"  [green][OK][/green] CSV created: [dim]{saved_csv_path}[/dim]")
+            console.print(f"  [green][OK][/green] Scenario contract validation saved: [dim]{scenario_contract_path}[/dim]")
             if engine.last_scenario_validation:
                 scenario_validation_path = save_json_artifact(
                 {
@@ -329,7 +347,7 @@ def process_single_url(
                     f"Scenario_Validation_{project_info['safe_name']}_{project_info['timestamp']}.json",
                 ),
                 )
-                console.print(f"  [green][OK][/green] Validasi scenario disimpan: [dim]{scenario_validation_path}[/dim]")
+                console.print(f"  [green][OK][/green] Scenario validation saved: [dim]{scenario_validation_path}[/dim]")
             case_memory_info = merge_case_memory(url, parsed_data, page_scope, page_model)
             if case_memory_info:
                 case_memory_path = save_json_artifact(
@@ -339,7 +357,7 @@ def process_single_url(
                         f"Case_Memory_{project_info['safe_name']}_{project_info['timestamp']}.json",
                     ),
                 )
-                console.print(f"  [green][OK][/green] Case memory diperbarui: [dim]{case_memory_path}[/dim]")
+                console.print(f"  [green][OK][/green] Case memory updated: [dim]{case_memory_path}[/dim]")
 
             execution_plan = build_execution_plan(parsed_data, page_model, page_info.get("url", url), site_profile=site_profile)
             execution_plan_validation = validate_execution_plan(execution_plan, page_model, page_info)
@@ -489,42 +507,39 @@ def process_single_url(
                 policy_pack_report,
                 policy_pack_report_path(project_info["run_dir"]),
             )
-            console.print(f"  [green][OK][/green] Execution plan dibuat: [dim]{execution_plan_path}[/dim]")
-            console.print(f"  [green][OK][/green] Validation plan disimpan: [dim]{validation_path}[/dim]")
-            console.print(f"  [green][OK][/green] Confidence analysis disimpan: [dim]{confidence_path}[/dim]")
+            console.print(f"  [green][OK][/green] Execution plan created: [dim]{execution_plan_path}[/dim]")
+            console.print(f"  [green][OK][/green] Plan validation saved: [dim]{validation_path}[/dim]")
+            console.print(f"  [green][OK][/green] Confidence analysis saved: [dim]{confidence_path}[/dim]")
             console.print(
-                f"  [green][OK][/green] Contradiction analysis disimpan: [dim]{contradiction_path}[/dim]"
+                f"  [green][OK][/green] Contradiction analysis saved: [dim]{contradiction_path}[/dim]"
             )
             console.print(
-                f"  [green][OK][/green] Anti-hallucination audit disimpan: [dim]{anti_hallucination_audit_path_saved}[/dim]"
+                f"  [green][OK][/green] Anti-hallucination audit saved: [dim]{anti_hallucination_audit_path_saved}[/dim]"
             )
             console.print(
-                f"  [green][OK][/green] Policy pack report disimpan: [dim]{policy_pack_path_saved}[/dim]"
+                f"  [green][OK][/green] Policy pack report saved: [dim]{policy_pack_path_saved}[/dim]"
             )
             if contradiction_report.get("summary", {}).get("contradiction_count", 0):
                 console.print(
                     "  [yellow][i][/yellow] Cross-stage contradictions: "
                     f"{contradiction_report['summary'].get('contradiction_count', 0)}"
                 )
-            if page_scope.get("confidence_explanation"):
-                console.print(
-                    "  [dim]Confidence insight: "
-                    + " | ".join(page_scope.get("confidence_explanation", [])[:3])
-                    + "[/dim]"
-                )
+            if page_info.get("visual_render_regression", {}).get("baseline_created"):
+                console.print(f"  [yellow][i][/yellow] Visual baseline created for {url}")
 
-            console.print("  [dim][>] Building executive summary...[/dim]")
+            console.print("  [dim][>] Generating Executive Summary...[/dim]")
             md_summary = engine.generate_executive_summary(url, project_info["title"], page_info, parsed_data)
+            _log_usage(engine, "Executive Summary")
             saved_md_path = runner.save_executive_summary(md_summary, project_info)
             console.print(f"  [green][OK][/green] Executive summary created: [dim]{saved_md_path}[/dim]")
             usage_path = save_json_artifact(engine.usage_snapshot(), token_usage_path(project_info["run_dir"]))
-            console.print(f"  [green][OK][/green] Token usage disimpan: [dim]{usage_path}[/dim]")
+            console.print(f"  [green][OK][/green] Token usage saved: [dim]{usage_path}[/dim]")
 
             executor = CodeGenerator(engine)
             pom_script = executor.generate_pom_script(project_info, execution_plan_path, headless=executor_headless)
 
         if pom_script:
-            console.print(f"\n[cyan]  [!] Script executor berhasil dibuat di:[/cyan] [bold]{pom_script}[/bold]")
+            console.print(f"\n[cyan]  [!] Script executor successfully created at:[/cyan] [bold]{pom_script}[/bold]")
             if execute_now is None:
                 console.print(
                     "\n[bold yellow]Do you want to run the executor now to collect video evidence?[/bold yellow]"
@@ -547,7 +562,7 @@ def process_single_url(
                     )
                     should_execute = False
                 elif execution_gate.get("override_applied"):
-                    console.print("[yellow][i][/yellow] Guard anti-hallucination dioverride via environment variable.")
+                    console.print("[yellow][i][/yellow] Anti-hallucination guard overridden via environment variable.")
 
             if should_execute:
                 console.print("[bold green][>] Running executor script...[/bold green]")
@@ -567,7 +582,7 @@ def process_single_url(
                         )
                         if flaky_info:
                             flaky_path = save_json_artifact(flaky_info, flaky_analysis_path(project_info["run_dir"]))
-                            console.print(f"[green][OK][/green] Flaky analysis disimpan: [dim]{flaky_path}[/dim]")
+                            console.print(f"[green][OK][/green] Flaky analysis saved: [dim]{flaky_path}[/dim]")
                         summary = analyze_execution_results(results_path)
                         summary_path = save_execution_summary(results_path, summary)
                         runner.update_csv_with_execution_results(saved_csv_path, results_path, csv_sep)
@@ -638,8 +653,8 @@ def process_single_url(
                         learning_path = execution_learning_path(project_info["run_dir"])
                         console.print(f"[green][OK][/green] Execution summary created: [dim]{summary_path}[/dim]")
                         console.print(f"[green][OK][/green] CSV updated with execution results: [dim]{saved_csv_path}[/dim]")
-                        console.print(f"[green][OK][/green] Replay verification disimpan: [dim]{replay_report_path}[/dim]")
-                        console.print(f"[green][OK][/green] Drift analysis disimpan: [dim]{drift_report_path}[/dim]")
+                        console.print(f"[green][OK][/green] Replay verification saved: [dim]{replay_report_path}[/dim]")
+                        console.print(f"[green][OK][/green] Drift analysis saved: [dim]{drift_report_path}[/dim]")
                         if replay_report.get("summary", {}).get("issue_count", 0):
                             console.print(
                                 "  [yellow][i][/yellow] Replay consistency issue: "
@@ -660,22 +675,24 @@ def process_single_url(
                             )
                             if learned_profile_info:
                                 console.print(
-                                    f"[green][OK][/green] Global knowledge bank diperbarui: "
+                                    f"[green][OK][/green] Global knowledge bank updated: "
                                     f"[dim]{learned_profile_info['global_path']}[/dim]"
                                 )
                                 console.print(
-                                    f"[green][OK][/green] Domain learning diperbarui: "
+                                    f"[green][OK][/green] Domain learning updated: "
                                     f"[dim]{learned_profile_info['domain_path']}[/dim]"
                                 )
                                 if learned_profile_info.get("cluster_paths"):
                                     console.print(
-                                        f"[green][OK][/green] Cluster learning diperbarui: "
+                                        f"[green][OK][/green] Cluster learning updated: "
                                         f"[dim]{', '.join(learned_profile_info['cluster_paths'][:3])}[/dim]"
                                     )
                 except subprocess.CalledProcessError as exc:
                     console.print(f"\n[bold red][ERR] Executor failed to run: {exc}[/bold red]")
             else:
                 console.print("[dim]  Execution skipped. The script can be run manually later.[/dim]")
+
+        console.print(f"\n[bold green][FINISHED] Jobs complete. Check results in: {project_info['run_dir']}[/bold green]")
 
     except Exception as exc:
         import traceback
@@ -694,9 +711,9 @@ def analyze_page_scope_with_retry(
     adaptive_recrawl: bool,
     engine: AIEngine,
 ) -> dict:
-    console.print(Rule(f"[bold]AI Analisa Scope Halaman: {url}[/bold]"))
     with console.status(
-        f"[bold green]AI ({engine.current_model}) sedang membaca konteks halaman dan menentukan scope testing...[/bold green]"
+        f"[bold green]AI analyzing scope...[/bold green]",
+        spinner="line",
     ):
         page_scope = engine.analyze_page_scope(
             url=url,
@@ -723,7 +740,7 @@ def analyze_page_scope_with_retry(
         f"  [yellow][i][/yellow] Low confidence ({current_confidence}). Retrying scan with more linked pages ({expanded_limit})."
     )
     with console.status(
-        f"[bold yellow]Running adaptive recrawl to enrich page context...[/bold yellow]",
+        f"[bold yellow]AI expanding context (low confidence)...[/bold yellow]",
         spinner="dots",
     ):
         refreshed_project_info, refreshed_page_info, _ = runner.scan_website(
@@ -737,9 +754,10 @@ def analyze_page_scope_with_retry(
     merge_recrawl_project_info(project_info, refreshed_project_info)
     page_info.clear()
     page_info.update(refreshed_page_info)
-
+ 
     with console.status(
-        f"[bold green]AI ({engine.current_model}) sedang menganalisa ulang scope dari konteks yang diperluas...[/bold green]"
+        f"[bold green]AI re-analyzing page...[/bold green]",
+        spinner="line",
     ):
         page_scope = engine.analyze_page_scope(
             url=url,
@@ -894,13 +912,13 @@ def main():
 
         if use_auth:
             console.print("\n[bold yellow][i] Cara memakai session auth Playwright:[/bold yellow]")
-            console.print("  1. Simpan file session bernama [bold green]auth_state.json[/bold green] di folder [bold cyan]auth/[/bold cyan].")
-            console.print("  2. Gunakan [dim]auth/sample_auth_state.json[/dim] sebagai template struktur file.")
+            console.print(f"  1. Simpan file session bernama [bold green]auth_state.json[/bold green] di folder [bold cyan]{AUTH_DIR}/[/bold cyan].")
+            console.print(f"  2. Gunakan [dim]{AUTH_DIR}/sample_auth_state.json[/dim] sebagai template struktur file.")
             console.print("  3. This session will be used during scan and executor run.")
             console.input("  [green]Press Enter once the session file is ready...[/green]")
 
         console.print("\n[bold]Step 4: Additional Instructions (Optional)[/bold]")
-        console.print("[dim]Type /profile_name.txt to load a profile from the instructions/ folder[/dim]")
+        console.print(f"[dim]Type /profile_name.txt to load a profile from {INSTRUCTIONS_DIR}[/dim]")
         instruction = ""
         instruction_lines = []
 
@@ -910,7 +928,7 @@ def main():
                 profile_name = first_line.lstrip("/")
                 if not profile_name.endswith(".txt"):
                     profile_name += ".txt"
-                profile_path = Path("instructions") / profile_name
+                profile_path = INSTRUCTIONS_DIR / profile_name
                 if profile_path.exists():
                     instruction = profile_path.read_text(encoding="utf-8")
                     console.print(f"[green][OK] Instruction profile loaded from {profile_path}[/green]")

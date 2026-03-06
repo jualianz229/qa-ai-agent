@@ -4,9 +4,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}TracePilot | AI QA Agent{% endblock %}</title>
+    <title>{% block title %}TracePilot{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="icon" type="image/jpeg" href="/icon.jpg">
+    <meta name="description" content="TracePilot – Create and run website test scenarios easily.">
     {% block styles %}{% endblock %}
 </head>
 
@@ -18,14 +19,14 @@
 
         <nav class="sidebar-nav">
             <div class="nav-section">
-                <p class="nav-label">Main Dashboard</p>
+                <p class="nav-label">Main</p>
                 <a href="{{ url_for('home') }}" class="nav-link {% if request.path == '/' %}active{% endif %}">
                     <span class="icon">📊</span> Overview
                 </a>
             </div>
 
             <div class="nav-section">
-                <p class="nav-label">Core Modules</p>
+                <p class="nav-label">Features</p>
                 <a href="{{ url_for('test_case_generator.scenario_testing_page') }}"
                     class="nav-link {% if '/scenario-testing' in request.path %}active{% endif %}">
                     <span class="icon">🧪</span> Case Generator
@@ -41,7 +42,7 @@
             </div>
 
             <div class="nav-section">
-                <p class="nav-label">Execution Analysis</p>
+                <p class="nav-label">Results</p>
                 <a href="{{ url_for('end_to_end_automation.automation_results_page') }}"
                     class="nav-link {% if '/automation-results' in request.path %}active{% endif %}">
                     <span class="icon">📈</span> Automation Runs
@@ -55,9 +56,9 @@
             {% if sidebar_scenario_runs %}
             <div class="nav-section">
                 <p class="nav-label">Recent Scenarios</p>
-                {% for run in sidebar_scenario_runs[:6] %}
-                <a href="{{ url_for('run_detail', run_name=run.run_name) }}" class="nav-link">
-                    <span class="icon">⚡</span> {{ run.run_name[:18] }}...
+                {% for run in (sidebar_scenario_runs or [])[:6] %}
+                <a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}" class="nav-link">
+                    <span class="icon">⚡</span> {{ (run.get('run_name') or '')[:18] }}...
                 </a>
                 {% endfor %}
             </div>
@@ -67,18 +68,14 @@
 
     <main class="main-content">
         <header class="page-header">
-            <p class="eyebrow">{% block header_kicker %}TracePilot Agent{% endblock %}</p>
-            <h1>{% block header_title %}TracePilot Dashboard{% endblock %}</h1>
-            <p class="subtitle">{% block header_subtitle %}Intelligent QA Platform for Modern Web Apps{% endblock %}</p>
+            <p class="eyebrow">{% block header_kicker %}{% endblock %}</p>
+            <h1>{% block header_title %}TracePilot{% endblock %}</h1>
+            <p class="subtitle">{% block header_subtitle %}Create and manage website test scenarios easily.{% endblock %}</p>
         </header>
 
         {% block content %}{% endblock %}
     </main>
 
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script>
-        lucide.createIcons();
-    </script>
     {% block scripts %}{% endblock %}
 </body>
 

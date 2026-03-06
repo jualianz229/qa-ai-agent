@@ -99,6 +99,7 @@
     let currentScenarioJobId = "";
     let inlineQueueTimer = 0;
     const draftStorageKey = "tracepilot.scenario.templateDraft.v2";
+    const jobIdStorageKey = "tracepilot.scenario.currentJobId";
 
     function formatDurationSeconds(createdAtIso, updatedAtIso) {
       const createdAt = Date.parse(String(createdAtIso || ""));
@@ -141,23 +142,31 @@
     function saveTemplateDraft() {
       try {
         const payload = {
+          url: scenarioUrl?.value || "",
           template_name: templateSelect?.value || "",
           template_content: templateEditor?.value || "",
           custom_template: customTemplate?.value || "",
+          crawl_limit: document.getElementById("scenario-crawl-limit")?.value || "3",
+          adaptive_recrawl: document.getElementById("scenario-recrawl")?.value || "yes",
         };
-        window.localStorage.setItem(draftStorageKey, JSON.stringify(payload));
+        window.sessionStorage.setItem(draftStorageKey, JSON.stringify(payload));
       } catch (_error) {
       }
     }
 
     function loadTemplateDraft() {
       try {
-        const raw = window.localStorage.getItem(draftStorageKey);
+        const raw = window.sessionStorage.getItem(draftStorageKey);
         if (!raw) return null;
         const payload = JSON.parse(raw);
-        if (customTemplate && payload?.custom_template && !customTemplate.value) {
-          customTemplate.value = String(payload.custom_template);
-        }
+        if (scenarioUrl && payload?.url) scenarioUrl.value = String(payload.url);
+        if (templateSelect && payload?.template_name) templateSelect.value = String(payload.template_name);
+        if (templateEditor && payload?.template_content) templateEditor.value = String(payload.template_content);
+        if (customTemplate && payload?.custom_template) customTemplate.value = String(payload.custom_template);
+        const crawlEl = document.getElementById("scenario-crawl-limit");
+        if (crawlEl && payload?.crawl_limit) crawlEl.value = String(payload.crawl_limit);
+        const recrawlEl = document.getElementById("scenario-recrawl");
+        if (recrawlEl && payload?.adaptive_recrawl) recrawlEl.value = String(payload.adaptive_recrawl);
         return payload;
       } catch (_error) {
         return null;
@@ -173,6 +182,40 @@
       return "Scenario";
     }
 
+    function cleanLogLines(lines) {
+      if (!Array.isArray(lines)) return [];
+      const cleaned = [];
+      let lastSpinnerBase = "";
+
+      for (const line of lines) {
+        let text = String(line || "").trim();
+        // Detect common spinner frames: they usually start with a spinner char (+ / - | \) and then a fixed message
+        const spinnerMatch = text.match(/^[\-\|\\\/]\s*(AI\s+.*?\.\.\.)/i);
+
+        if (spinnerMatch) {
+          const base = spinnerMatch[1].toLowerCase();
+          // Strip the spinner character (e.g., "\ AI checking..." -> "AI checking...")
+          const cleanText = text.replace(/^[\-\|\\\/]\s*/, "");
+
+          if (base === lastSpinnerBase) {
+            // It's the same operation, update the last line instead of adding new one
+            if (cleaned.length > 0) {
+              cleaned[cleaned.length - 1] = cleanText;
+            } else {
+              cleaned.push(cleanText);
+            }
+            continue;
+          }
+          lastSpinnerBase = base;
+          cleaned.push(cleanText);
+        } else {
+          lastSpinnerBase = "";
+          cleaned.push(line);
+        }
+      }
+      return cleaned;
+    }
+
     function renderInlineJobs(jobs) {
       if (!inlineJobs) return;
       if (!Array.isArray(jobs) || !jobs.length) {
@@ -181,41 +224,69 @@
       }
       inlineJobs.innerHTML = "";
       jobs.slice(0, 8).forEach((job) => {
-        const logLines = Array.isArray(job.log_lines) ? job.log_lines : [];
+        const rawLines = Array.isArray(job.log_lines) ? job.log_lines : [];
+        const logLines = cleanLogLines(rawLines);
+
         const isLogCollapsed = logLines.length > 40;
         const fullLog = logLines.join("\n");
         const previewLog = isLogCollapsed ? logLines.slice(0, 40).join("\n") : fullLog;
         const isEmptyLog = !previewLog;
-        const logText = previewLog || "Waiting for log output... Click Refresh queue.";
+        const logText = previewLog || "Waiting for log output...";
         const runName = String(job.run_name || "").trim();
         const sourceLabel = sourceLabelFromMode(job?.payload?.mode);
         const durationLabel = formatDurationSeconds(job?.created_at, job?.updated_at);
         const statusValue = String(job.status || "").toLowerCase();
+        const isRunning = statusValue === "running" || statusValue === "queued";
+
         const lastErrorLine = statusValue === "failed"
           ? [...logLines].reverse().find((line) => /error|failed|traceback/i.test(String(line || "")))
           : "";
+
         const card = document.createElement("article");
-        card.className = `job-card job-${String(job.status || "")}`;
+        card.className = `job-card job-${statusValue}`;
         card.innerHTML = `
-          <header><strong>${String(job.payload?.url || "-")}</strong><span>${String(job.status || "-")}</span></header>
+          <header>
+            <div class="job-id-group">
+                <strong>${String(job.payload?.url || "-")}</strong>
+                ${isRunning ? `
+                <div class="ai-thinking-group">
+                  <span class="spinner"></span>
+                  <span>AI is thinking...</span>
+                </div>` : ""}
+            </div>
+            <span class="status-indicator status-${statusValue}">${statusValue}</span>
+          </header>
           <div class="job-meta">
             <span class="panel-badge">Source: ${sourceLabel}</span>
             <span class="panel-badge">Started: ${String(job.created_at || "-")}</span>
             <span class="panel-badge">Duration: ${durationLabel}</span>
           </div>
-          <div class="job-command-viewer mono">${(job.command || []).join(" ")}</div>
-          <div class="job-actions">
-            ${runName ? `<a class="inline-link" href="/runs/${encodeURIComponent(runName)}">Open run ${runName}</a>` : ""}
-            ${runName ? `<button class="inline-mini-button" type="button" data-copy-run-link="/runs/${encodeURIComponent(runName)}">Copy run link</button>` : ""}
-            ${isLogCollapsed ? `<button class="inline-mini-button" type="button" data-log-toggle>Show more</button>` : ""}
-          </div>
           ${lastErrorLine ? `<p class="job-error-summary">${String(lastErrorLine)}</p>` : ""}
-          <pre class="job-log-viewer ${isLogCollapsed ? "is-collapsed" : ""} ${isEmptyLog ? "is-empty" : ""}">${logText}</pre>
+          <div class="terminal-container">
+            <div class="terminal-header">
+                <span class="terminal-dot dot-red"></span>
+                <span class="terminal-dot dot-yellow"></span>
+                <span class="terminal-dot dot-green"></span>
+                <span class="terminal-title">tracepilot@agent:~</span>
+            </div>
+            <pre class="job-log-viewer ${isEmptyLog ? "is-empty" : ""}">${logText}</pre>
+          </div>
         `;
         const logView = card.querySelector(".job-log-viewer");
         if (logView) {
-          logView.dataset.previewLog = previewLog || "Waiting for log output...";
-          logView.dataset.fullLog = fullLog || "Waiting for log output...";
+          // If this is the FIRST render or user is at the bottom, auto-scroll.
+          // Otherwise, stay where the user has manually scrolled.
+          const scrollThreshold = 100; // pixels from bottom to count as "at bottom"
+          const isAtBottom = (logView.scrollHeight - logView.scrollTop - logView.clientHeight) < scrollThreshold;
+
+          if (!logView.dataset.everScrolled || isAtBottom) {
+            // We need to wait for DOM to update if we were replacing everything,
+            // but here we are still inside the loop. Let's use requestAnimationFrame.
+            requestAnimationFrame(() => {
+              logView.scrollTop = logView.scrollHeight;
+            });
+            logView.dataset.everScrolled = "true";
+          }
         }
         inlineJobs.appendChild(card);
       });
@@ -223,7 +294,7 @@
         button.addEventListener("click", async () => {
           const path = button.getAttribute("data-copy-run-link");
           if (!path) return;
-          const text = `${window.location.origin}${path}`;
+          const text = `${window.location.origin}${path} `;
           try {
             await navigator.clipboard.writeText(text);
             button.textContent = "Copied";
@@ -248,6 +319,7 @@
 
     async function refreshInlineQueue() {
       if (!inlineJobs) return;
+      let hasVisibleJobs = false;
       try {
         const response = await fetch("/api/jobs");
         const payload = await response.json();
@@ -263,6 +335,7 @@
         const visibleJobs = currentJob && !activeJobs.find((job) => String(job?.id || "") === String(currentJob.id || ""))
           ? [currentJob, ...activeJobs]
           : activeJobs;
+        hasVisibleJobs = visibleJobs.length > 0;
         renderInlineJobs(visibleJobs);
 
         const currentState = String(currentJob?.status || "").toLowerCase();
@@ -275,7 +348,11 @@
         if (!stillRunning && currentScenarioJobId) {
           window.clearInterval(inlineQueueTimer);
           inlineQueueTimer = 0;
+          try { window.sessionStorage.removeItem(jobIdStorageKey); } catch (_e) {}
           status.textContent = currentState === "failed" ? "Test case run failed. Check queue log." : "Test case run finished.";
+        }
+        if (hasVisibleJobs && inlineQueuePanel) {
+          inlineQueuePanel.classList.remove("hidden-panel");
         }
       } catch (error) {
         inlineJobs.innerHTML = `<p class="empty-state">${error.message || "Failed to load queue."}</p>`;
@@ -327,22 +404,29 @@
       loadTemplateContent(templateSelect.value || "");
       saveTemplateDraft();
     });
-    scenarioUrl?.addEventListener("input", updateUrlValidationUi);
+    scenarioUrl?.addEventListener("input", () => { updateUrlValidationUi(); saveTemplateDraft(); });
     templateEditor?.addEventListener("input", saveTemplateDraft);
     customTemplate?.addEventListener("input", saveTemplateDraft);
+    document.getElementById("scenario-crawl-limit")?.addEventListener("change", saveTemplateDraft);
+    document.getElementById("scenario-recrawl")?.addEventListener("change", saveTemplateDraft);
 
-    const restoredTemplateDraft = loadTemplateDraft();
+    try { currentScenarioJobId = String(sessionStorage.getItem(jobIdStorageKey) || ""); } catch (_e) {}
+    loadTemplateDraft();
     (async () => {
-      if (templateSelect) {
-        templateSelect.value = "";
-      }
-      await loadTemplateContent("");
-      if (restoredTemplateDraft && customTemplate && restoredTemplateDraft.custom_template) {
-        customTemplate.value = String(restoredTemplateDraft.custom_template);
+      const draft = loadTemplateDraft();
+      if (templateSelect && draft?.template_name) {
+        templateSelect.value = draft.template_name;
+        await loadTemplateContent(draft.template_name);
+        if (templateEditor && draft.template_content) templateEditor.value = draft.template_content;
+      } else {
+        await loadTemplateContent(templateSelect?.value || "");
       }
       saveTemplateDraft();
     })();
     updateUrlValidationUi();
+    refreshInlineQueue().then(() => {
+      startInlineQueuePolling();
+    });
 
     form?.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -366,10 +450,7 @@
           throw new Error(payload.error || "Failed to generate test case.");
         }
         currentScenarioJobId = String(payload?.job?.id || "");
-        try {
-          window.localStorage.removeItem(draftStorageKey);
-        } catch (_error) {
-        }
+        try { window.sessionStorage.setItem(jobIdStorageKey, currentScenarioJobId); } catch (_e) {}
         status.textContent = "Test case job is running...";
         if (inlineQueuePanel) {
           inlineQueuePanel.classList.remove("hidden-panel");

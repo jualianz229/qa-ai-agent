@@ -52,8 +52,8 @@ DEFAULT_SITE_PROFILE = {
     },
     "auth": {
         "storage_state_candidates": [
-            "auth/auth_state.json",
-            "auth/session_state.json",
+            "configs/auth/auth_state.json",
+            "configs/auth/session_state.json",
         ],
         "login_terms": ["login", "sign in", "masuk", "log in"],
         "otp_terms": ["otp", "verification code", "one time password", "kode verifikasi"],
