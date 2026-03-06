@@ -91,7 +91,7 @@ endblock %}
           use_auth: vrtUseAuth?.value || "no",
         };
         window.sessionStorage.setItem(pageStateKey, JSON.stringify(payload));
-      } catch (_e) {}
+      } catch (_e) { }
     }
 
     function loadVrtPageState() {
@@ -102,7 +102,7 @@ endblock %}
         if (vrtUrlInput && payload?.url) vrtUrlInput.value = String(payload.url);
         if (vrtCrawlLimit && payload?.crawl_limit) vrtCrawlLimit.value = String(payload.crawl_limit);
         if (vrtUseAuth && payload?.use_auth) vrtUseAuth.value = String(payload.use_auth);
-      } catch (_e) {}
+      } catch (_e) { }
     }
 
     function validateVrtUrl(raw) {
@@ -136,67 +136,71 @@ endblock %}
         inlineJobs.innerHTML = '<p class="empty-state">No active jobs yet.</p>';
         return;
       }
+      const sourceLabelFromMode = window.JobQueueUI ? window.JobQueueUI.sourceLabelFromMode : function (m) { return (m === "vrt_scan" ? "VRT Scan" : m === "automation_test" ? "Automation" : "Scenario"); };
+      const formatDurationSeconds = window.JobQueueUI ? window.JobQueueUI.formatDurationSeconds : function (a, b) { return "0s"; };
       inlineJobs.innerHTML = "";
-      jobs.slice(0, 8).forEach((job) => {
-        const logLines = Array.isArray(job.log_lines) ? job.log_lines : [];
-        const isLogCollapsed = logLines.length > 40;
-        const fullLog = logLines.join("\n");
-        const previewLog = isLogCollapsed ? logLines.slice(0, 40).join("\n") : fullLog;
-        const isEmptyLog = !previewLog;
-        const logText = previewLog || "Waiting for log output... Click Refresh queue.";
-        const runName = String(job.run_name || "").trim();
+      jobs.forEach((job) => {
+        const statusValue = String(job.status || "").toLowerCase();
+        const isRunning = statusValue === "running" || statusValue === "queued";
+        const section = window.JobQueueUI && window.JobQueueUI.buildStepsAndLogSection
+          ? window.JobQueueUI.buildStepsAndLogSection(job, isRunning, false)
+          : { stepsHtml: "", hasSteps: false, tokenUsed: (window.JobQueueUI && window.JobQueueUI.getTokenUsed) ? window.JobQueueUI.getTokenUsed(job.log_lines || []) : null };
+        const hasSteps = section.hasSteps;
         const mode = String(job?.payload?.mode || "").toLowerCase();
-        const sourceLabel = mode === "vrt_scan" ? "VRT Scan" : mode === "automation_test" ? "Automation" : "Scenario";
+        const sourceLabel = sourceLabelFromMode(mode);
         const createdAt = String(job.created_at || "-");
-        const createdMs = Date.parse(createdAt);
-        const updatedMs = Date.parse(String(job.updated_at || "")) || Date.now();
-        const duration = Number.isFinite(createdMs) ? `${Math.max(0, Math.round((updatedMs - createdMs) / 1000))}s` : "-";
+        const durationLabel = formatDurationSeconds(job.created_at, job.updated_at);
+
         const card = document.createElement("article");
-        card.className = `job-card job-${String(job.status || "")}`;
+        card.className = `job-card job-${statusValue}`;
         card.innerHTML = `
-          <header><strong>${String(job.payload?.url || "-")}</strong><span>${String(job.status || "-")}</span></header>
+          <header>
+            <div class="job-header-main">
+                <strong>${String(job.payload?.url || "-")}</strong>
+                ${isRunning ? `
+                <div class="ai-thinking-group">
+                  <span class="spinner"></span>
+                  <span>Running</span>
+                </div>` : ""}
+            </div>
+            <div class="job-header-actions">
+              ${isRunning ? `<button class="inline-mini-button danger" type="button" data-cancel-job="${job.id}">Cancel</button>` : ""}
+              ${!isRunning ? `<span class="status-indicator status-${statusValue}">${statusValue}</span>` : ""}
+            </div>
+          </header>
           <div class="job-meta">
             <span class="panel-badge">Source: ${sourceLabel}</span>
             <span class="panel-badge">Started: ${createdAt}</span>
-            <span class="panel-badge">Duration: ${duration}</span>
+            <span class="panel-badge">Duration: ${durationLabel}</span>
           </div>
-          <div class="job-command-viewer mono">${(job.command || []).join(" ")}</div>
-          <div class="job-actions">
-            ${runName ? `<a class="inline-link" href="/runs/${encodeURIComponent(runName)}">Open run ${runName}</a>` : ""}
-            ${runName ? `<button class="inline-mini-button" type="button" data-copy-run-link="/runs/${encodeURIComponent(runName)}">Copy run link</button>` : ""}
-            ${isLogCollapsed ? `<button class="inline-mini-button" type="button" data-log-toggle>Show more</button>` : ""}
-          </div>
-          <pre class="job-log-viewer ${isLogCollapsed ? "is-collapsed" : ""} ${isEmptyLog ? "is-empty" : ""}">${logText}</pre>
+          ${hasSteps ? `<div class="job-steps-list">${section.stepsHtml}</div>` : ""}
+          ${section.tokenUsed != null ? `<p class="job-token-used">Tokens used: <strong>${Number(section.tokenUsed).toLocaleString()}</strong></p>` : ""}
+          ${(job.run_name || "") && statusValue === "completed" ? `<p class="job-cta-detail"><a class="inline-link" href="/runs/${encodeURIComponent(String(job.run_name || "").trim())}">File ready. View test details</a></p>` : ""}
         `;
-        const logView = card.querySelector(".job-log-viewer");
-        if (logView) {
-          logView.dataset.previewLog = previewLog || "Waiting for log output...";
-          logView.dataset.fullLog = fullLog || "Waiting for log output...";
-        }
         inlineJobs.appendChild(card);
       });
-      inlineJobs.querySelectorAll("[data-copy-run-link]").forEach((button) => {
+
+      inlineJobs.querySelectorAll("[data-cancel-job]").forEach((button) => {
         button.addEventListener("click", async () => {
-          const path = button.getAttribute("data-copy-run-link");
-          if (!path) return;
+          const jobId = button.getAttribute("data-cancel-job");
+          if (!jobId || button.disabled) return;
+          if (!confirm("Are you sure you want to cancel this VRT scan?")) return;
+
+          button.disabled = true;
+          button.textContent = "Cancelling...";
           try {
-            await navigator.clipboard.writeText(`${window.location.origin}${path}`);
-            button.textContent = "Copied";
-            window.setTimeout(() => {
-              button.textContent = "Copy run link";
-            }, 900);
-          } catch (_error) {
+            const response = await fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error(payload.error || "Failed to cancel job.");
+            }
+            button.textContent = "Cancelled";
+            refreshInlineQueue();
+          } catch (error) {
+            alert(error.message);
+            button.disabled = false;
+            button.textContent = "Cancel";
           }
-        });
-      });
-      inlineJobs.querySelectorAll("[data-log-toggle]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const card = button.closest(".job-card");
-          const pre = card?.querySelector(".job-log-viewer");
-          if (!pre) return;
-          const collapsed = pre.classList.toggle("is-collapsed");
-          pre.textContent = collapsed ? (pre.dataset.previewLog || "") : (pre.dataset.fullLog || "");
-          button.textContent = collapsed ? "Show more" : "Show less";
         });
       });
     }
@@ -204,12 +208,13 @@ endblock %}
     async function refreshInlineQueue() {
       if (!inlineJobs) return;
       try {
-        const response = await fetch("/api/jobs");
+        const response = await fetch("/api/jobs?mode=vrt_scan");
         const payload = await response.json();
         if (!response.ok) {
           throw new Error(payload.error || "Failed to load queue.");
         }
-        const activeJobs = (payload.jobs || []).filter((job) => {
+        const moduleJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+        const activeJobs = moduleJobs.filter((job) => {
           const status = String(job?.status || "").toLowerCase();
           return status === "queued" || status === "running";
         });

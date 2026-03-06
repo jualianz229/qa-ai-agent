@@ -3,6 +3,7 @@ from urllib.parse import urlparse
 import sys
 import json
 import os
+import time
 import functools
 import logging
 from pathlib import Path
@@ -73,7 +74,8 @@ def is_automation_run(run_name: str) -> bool:
 def _cached_read_json(path_str: str, modified_time: float) -> dict:
     try:
         return json.loads(Path(path_str).read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        get_logger(__name__).debug("Read JSON failed for %s: %s", path_str, exc)
         return {}
 
 def load_json_file(path: Path) -> dict:
@@ -89,11 +91,36 @@ def atomic_write_json(filepath: Path | str, data: dict | list) -> None:
     path = Path(filepath)
     lock_path = str(path) + ".lock"
     tmp_path = path.with_suffix('.tmp')
-    
+
     with FileLock(lock_path, timeout=5):
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, path)
+        # On Windows, os.replace can raise PermissionError if target is open elsewhere.
+        for attempt in range(4):
+            try:
+                os.replace(tmp_path, path)
+                return
+            except PermissionError:
+                if attempt < 3:
+                    time.sleep(0.05 * (attempt + 1))
+                else:
+                    # Fallback: write directly to target (overwrite in place).
+                    try:
+                        with open(path, 'w', encoding='utf-8') as f:
+                            json.dump(data, f, indent=2, ensure_ascii=False)
+                    except Exception:
+                        if tmp_path.exists():
+                            try:
+                                tmp_path.unlink()
+                            except OSError:
+                                pass
+                        raise
+                    if tmp_path.exists():
+                        try:
+                            tmp_path.unlink()
+                        except OSError:
+                            pass
+                    return
 
 
 def resolve_run_dir(run_name: str) -> Path:

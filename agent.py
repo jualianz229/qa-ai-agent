@@ -13,6 +13,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -70,6 +71,352 @@ load_dotenv()
 
 console = Console(force_terminal=True)
 runner = Scanner()
+
+
+def _load_first_matching_json(directory: Path, pattern: str) -> dict:
+    if not directory.exists():
+        return {}
+    file_path = next(directory.glob(pattern), None)
+    if not file_path:
+        return {}
+    try:
+        return json.loads(file_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def load_run_context(run_dir: str | Path, csv_sep: str = ",") -> dict:
+    """Load project_info, page_info, page_scope, page_model, parsed_data, and validations from an existing run directory."""
+    run_path = Path(run_dir)
+    if not run_path.is_dir():
+        return {}
+    json_dir = run_path / "JSON"
+    raw_scan = _load_first_matching_json(json_dir, "raw_scan_*.json")
+    page_scope = _load_first_matching_json(json_dir, "Page_Scope_*.json")
+    page_model = _load_first_matching_json(json_dir, "Normalized_Page_Model_*.json")
+    site_profile = _load_first_matching_json(json_dir, "Site_Profile_*.json")
+    scope_validation = _load_first_matching_json(json_dir, "Page_Scope_Validation_*.json")
+    scenario_validation = _load_first_matching_json(json_dir, "Scenario_Validation_*.json")
+    execution_plan = _load_first_matching_json(json_dir, "Execution_Plan_*.json")
+    execution_plan_validation = _load_first_matching_json(json_dir, "Execution_Plan_Validation_*.json")
+
+    safe_name = "unknown"
+    timestamp = ""
+    if json_dir.exists():
+        for f in json_dir.glob("raw_scan_*.json"):
+            stem = f.stem
+            if stem.startswith("raw_scan_"):
+                parts = stem[len("raw_scan_"):].rsplit("_", 2)
+                if len(parts) >= 2:
+                    safe_name = parts[0]
+                    timestamp = "_".join(parts[1:])
+                break
+
+    url = raw_scan.get("url", "")
+    domain = urlparse(url).netloc.replace("www.", "") if url else "unknown"
+    title = page_scope.get("page_type") or raw_scan.get("title") or domain
+
+    project_info = {
+        "title": title,
+        "domain": domain,
+        "project_name": f"{domain} {str(title)[:40]}".strip(),
+        "run_dir": str(run_path),
+        "timestamp": timestamp,
+        "safe_name": safe_name,
+        "site_profile": site_profile or load_site_profile(url),
+    }
+
+    csv_path = next(run_path.glob("*.csv"), None)
+    parsed_data = []
+    if csv_path:
+        import csv as csv_module
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            parsed_data = list(csv_module.DictReader(handle))
+
+    return {
+        "project_info": project_info,
+        "page_info": raw_scan,
+        "page_scope": page_scope,
+        "page_model": page_model,
+        "parsed_data": parsed_data,
+        "scenario_validation": scenario_validation,
+        "scope_validation": scope_validation,
+        "execution_plan": execution_plan,
+        "execution_plan_validation": execution_plan_validation,
+        "csv_path": csv_path,
+        "csv_sep": csv_sep,
+    }
+
+
+def _job_step(step_id: int, message: str) -> None:
+    """Emit a step line for Live Jobs UI (GitHub Actions-style). Parsed by frontend."""
+    print(f"[STEP] {step_id} | {message}", flush=True)
+
+
+def _resolve_run_dir(run_name_or_path: str | Path) -> Path:
+    """Resolve run dir from absolute path or a folder name under Result/."""
+    p = Path(run_name_or_path)
+    if p.is_absolute():
+        return p
+    return RESULT_DIR / str(run_name_or_path)
+
+
+def run_feature_case_generator(
+    *,
+    url: str | None,
+    input_run: str | Path | None,
+    instruction: str,
+    csv_sep: str,
+    use_auth: bool,
+    crawl_limit: int,
+    adaptive_recrawl: bool,
+    run_name: str | None,
+) -> None:
+    """Case generator feature: scan/scope (if needed) -> generate scenarios (CSV) -> stop."""
+    engine = AIEngine()
+    engine.last_scope_validation = {}
+    engine.last_scenario_validation = {}
+    engine.reset_usage()
+
+    if input_run:
+        run_dir = _resolve_run_dir(input_run)
+        ctx = load_run_context(run_dir, csv_sep)
+        if not ctx.get("project_info") or not ctx.get("page_info"):
+            console.print(f"[red]Run dir tidak valid / belum ada hasil scan: {run_dir}[/red]")
+            return
+        project_info = ctx["project_info"]
+        page_info = ctx["page_info"]
+        page_scope = ctx.get("page_scope") or {}
+        page_model = ctx.get("page_model") or {}
+        url = page_info.get("url", "") or (url or "")
+
+        if not page_model:
+            page_model = build_normalized_page_model(page_info)
+            save_json_artifact(
+                page_model,
+                json_artifact_path(
+                    project_info["run_dir"],
+                    f"Normalized_Page_Model_{project_info['safe_name']}_{project_info['timestamp']}.json",
+                ),
+            )
+        if not page_scope:
+            page_scope = analyze_page_scope_with_retry(
+                url=url,
+                project_info=project_info,
+                page_info=page_info,
+                instruction=instruction,
+                use_auth=False,
+                crawl_limit=0,
+                adaptive_recrawl=False,
+                engine=engine,
+            )
+            runner.save_page_scope(page_scope, project_info)
+    else:
+        if not url:
+            console.print("[red]Case generator butuh --url atau --input-run.[/red]")
+            return
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        site_profile = load_site_profile(url)
+
+        console.print(Rule(f"[bold]Case Generator: {url}[/bold]"))
+        _job_step(1, "Scanning page")
+        with console.status("[bold yellow]Scanning page...[/bold yellow]", spinner="line"):
+            project_info, page_info, _ = runner.scan_website(
+                url,
+                use_auth,
+                crawl_limit=crawl_limit,
+                site_profile=site_profile,
+                run_name=run_name,
+            )
+        _job_step(1, "done")
+
+        _job_step(2, "Scope analysis")
+        page_scope = analyze_page_scope_with_retry(
+            url=url,
+            project_info=project_info,
+            page_info=page_info,
+            instruction=instruction,
+            use_auth=use_auth,
+            crawl_limit=crawl_limit,
+            adaptive_recrawl=adaptive_recrawl,
+            engine=engine,
+        )
+        _log_usage(engine, "Scope Analysis")
+        page_model = build_normalized_page_model(page_info)
+        site_profile = enrich_site_profile_with_clusters(site_profile, page_model=page_model, page_scope=page_scope)
+        page_info["site_profile"] = site_profile
+        page_model["site_profile"] = site_profile
+        save_json_artifact(
+            page_model,
+            json_artifact_path(
+                project_info["run_dir"],
+                f"Normalized_Page_Model_{project_info['safe_name']}_{project_info['timestamp']}.json",
+            ),
+        )
+        save_json_artifact(
+            site_profile,
+            json_artifact_path(
+                project_info["run_dir"],
+                f"Site_Profile_{project_info['safe_name']}_{project_info['timestamp']}.json",
+            ),
+        )
+        if engine.last_scope_validation:
+            save_json_artifact(
+                {
+                    "issues": engine.last_scope_validation.get("issues", []),
+                    "allowed_vocabulary": engine.last_scope_validation.get("allowed_vocabulary", {}),
+                    "task_contract": engine.last_scope_validation.get("task_contract", {}),
+                    "unsupported_surface_report": engine.last_scope_validation.get("unsupported_surface_report", {}),
+                    "routing": engine.last_scope_validation.get("routing", {}),
+                    "fact_pack_summary": engine.last_scope_validation.get("fact_pack_summary", {}),
+                    "historical_signal": engine.last_scope_validation.get("historical_signal", {}),
+                    "composite_confidence": engine.last_scope_validation.get("composite_confidence", {}),
+                },
+                json_artifact_path(
+                    project_info["run_dir"],
+                    f"Page_Scope_Validation_{project_info['safe_name']}_{project_info['timestamp']}.json",
+                ),
+            )
+
+        runner.save_page_scope(page_scope, project_info)
+        runner.save_crawled_pages(page_info, project_info)
+        runner.save_raw_scan(page_info, project_info)
+        runner.save_visual_regression_artifacts(page_info, project_info)
+        _job_step(2, "done")
+
+    _job_step(3, "Generate test scenarios")
+    console.print(Rule(f"[bold]Generate Test Scenarios (CSV): {url}[/bold]"))
+    with console.status("[bold green]AI generating scenarios...[/bold green]", spinner="line"):
+        parsed_data = engine.generate_test_scenarios(
+            url=url,
+            website_title=project_info["title"],
+            page_info=page_info,
+            page_model=page_model,
+            page_scope=page_scope,
+            custom_instruction=instruction,
+            csv_sep=csv_sep,
+        )
+    _log_usage(engine, "Scenario Generation")
+    parsed_data = _coerce_non_empty_scenarios(
+        parsed_data, engine, url, page_info, page_model, page_scope, instruction
+    )
+
+    scenario_contract = validate_scenario_contract(
+        cases=parsed_data,
+        page_scope=page_scope,
+        page_model=page_model,
+        page_info=page_info,
+    )
+    save_json_artifact(scenario_contract, scenario_contract_validation_path(project_info["run_dir"]))
+    if not scenario_contract.get("is_valid", False):
+        salvage_cases = list(scenario_contract.get("valid_cases", []) or [])
+        if salvage_cases:
+            parsed_data = salvage_cases
+        else:
+            parsed_data = _build_fallback_scenarios(engine, url, page_info, page_model, page_scope, instruction)
+            scenario_contract = validate_scenario_contract(
+                cases=parsed_data,
+                page_scope=page_scope,
+                page_model=page_model,
+                page_info=page_info,
+            )
+            save_json_artifact(scenario_contract, scenario_contract_validation_path(project_info["run_dir"]))
+    _job_step(3, "done")
+
+    _job_step(4, "Save CSV and artifacts")
+    saved_csv_path = runner.save_csv_scenarios(parsed_data, project_info, csv_sep)
+    case_memory_info = merge_case_memory(url, parsed_data, page_scope, page_model)
+    if case_memory_info:
+        save_json_artifact(
+            case_memory_info,
+            json_artifact_path(
+                project_info["run_dir"],
+                f"Case_Memory_{project_info['safe_name']}_{project_info['timestamp']}.json",
+            ),
+        )
+
+    console.print(f"  [green][OK][/green] CSV created: [dim]{saved_csv_path}[/dim]")
+    _job_step(4, "done")
+    _job_step(0, "Complete job")
+    _job_step(0, "done")
+    console.print(f"[bold green][FINISHED] Case Generator done. Hasil: {project_info['run_dir']}[/bold green]")
+
+
+def run_feature_e2e_automation(*, input_run: str | Path, executor_headless: bool, csv_sep: str) -> None:
+    """E2E automation feature: generate executor script -> run it -> store results (no test generation)."""
+    run_dir = _resolve_run_dir(input_run)
+    ctx = load_run_context(run_dir, csv_sep)
+    if not ctx.get("project_info"):
+        console.print(f"[red]Run dir tidak valid: {run_dir}[/red]")
+        return
+    project_info = ctx["project_info"]
+
+    execution_plan_path = next(Path(project_info["run_dir"]).glob("JSON/Execution_Plan_*.json"), None)
+    if not execution_plan_path:
+        console.print("[red]Execution plan tidak ditemukan (JSON/Execution_Plan_*.json).[/red]")
+        console.print("[dim]Jalankan mode full atau buat execution plan dulu.[/dim]")
+        return
+
+    _job_step(1, "Generate executor script")
+    engine = AIEngine()
+    executor = CodeGenerator(engine)
+    pom_script = executor.generate_pom_script(project_info, execution_plan_path, headless=executor_headless)
+    if not pom_script:
+        console.print("[red]Gagal membuat script executor.[/red]")
+        _job_step(1, "fail")
+        return
+    _job_step(1, "done")
+
+    console.print(f"[green][OK][/green] Script dibuat: [dim]{pom_script}[/dim]")
+    _job_step(2, "Run Playwright tests")
+    import subprocess
+    try:
+        subprocess.run([sys.executable, pom_script.name], cwd=pom_script.parent, check=True)
+    except subprocess.CalledProcessError as exc:
+        console.print(f"[bold red][ERR] Executor gagal: {exc}[/bold red]")
+        _job_step(2, "fail")
+        return
+    _job_step(2, "done")
+
+    _job_step(3, "Save execution results")
+    run_path = Path(project_info["run_dir"])
+    results_path = execution_results_path(run_path, create=False)
+    if results_path.exists():
+        csv_path = next(run_path.glob("*.csv"), None)
+        if csv_path:
+            runner.update_csv_with_execution_results(csv_path, results_path, csv_sep)
+        summary = analyze_execution_results(results_path)
+        save_execution_summary(results_path, summary)
+        console.print(f"[green][OK][/green] Execution results saved: [dim]{results_path}[/dim]")
+    _job_step(3, "done")
+    _job_step(0, "Complete job")
+    _job_step(0, "done")
+    console.print(f"[bold green][FINISHED] E2E Automation done. Hasil: {project_info['run_dir']}[/bold green]")
+
+
+def run_feature_visual_regression(*, url: str, use_auth: bool, run_name: str | None) -> None:
+    """Visual regression feature: scan page -> save Visual_Baseline/Visual_Diff -> stop."""
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    site_profile = load_site_profile(url)
+    console.print(Rule(f"[bold]Visual Regression: {url}[/bold]"))
+    _job_step(1, "Capture visual snapshot")
+    with console.status("[bold yellow]Capturing visual snapshot...[/bold yellow]", spinner="line"):
+        project_info, page_info, _ = runner.scan_website(
+            url, use_auth, crawl_limit=1, site_profile=site_profile, run_name=run_name
+        )
+    _job_step(1, "done")
+    _job_step(2, "Save baseline and diff")
+    runner.save_raw_scan(page_info, project_info)
+    baseline_path, diff_path = runner.save_visual_regression_artifacts(page_info, project_info)
+    _job_step(2, "done")
+    _job_step(0, "Complete job")
+    _job_step(0, "done")
+    console.print(f"  [green][OK][/green] Baseline: [dim]{baseline_path}[/dim]")
+    console.print(f"  [green][OK][/green] Diff: [dim]{diff_path}[/dim]")
+    console.print(f"[bold green][FINISHED] Visual Regression done. Hasil: {project_info['run_dir']}[/bold green]")
+
 
 INSTRUCTIONS_DIR.mkdir(parents=True, exist_ok=True)
 AUTH_DIR.mkdir(parents=True, exist_ok=True)
@@ -822,7 +1169,16 @@ def parse_args():
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--url")
     parser.add_argument("--batch-file")
-    parser.add_argument("--run-name")
+    parser.add_argument("--run-name", help="Nama run output (folder di bawah Result/) saat scan (opsional).")
+    parser.add_argument(
+        "--feature",
+        choices=["case-generator", "e2e-automation", "visual-regression"],
+        help="Jalankan per fitur saja lalu berhenti.",
+    )
+    parser.add_argument(
+        "--input-run",
+        help="Run folder existing (nama folder di bawah Result/ atau path penuh). Dipakai untuk feature yang butuh data run sebelumnya.",
+    )
     parser.add_argument("--instruction", default="")
     parser.add_argument("--instruction-file")
     parser.add_argument("--csv-sep", choices=[",", ";"], default=",")
@@ -854,6 +1210,43 @@ def main():
             box=box.DOUBLE_EDGE,
         )
     )
+
+    if getattr(args, "feature", None):
+        instruction = _load_instruction(args.instruction or "", args.instruction_file)
+        csv_sep = ";" if args.csv_sep == ";" else ","
+        use_auth = bool(args.use_auth)
+        crawl_limit = int(args.crawl_limit or 3)
+        adaptive_recrawl = not bool(args.disable_adaptive_recrawl)
+        executor_headless = not bool(args.executor_headed)
+
+        if args.feature == "case-generator":
+            run_feature_case_generator(
+                url=args.url,
+                input_run=args.input_run,
+                instruction=instruction,
+                csv_sep=csv_sep,
+                use_auth=use_auth,
+                crawl_limit=crawl_limit,
+                adaptive_recrawl=adaptive_recrawl,
+                run_name=args.run_name,
+            )
+        elif args.feature == "e2e-automation":
+            if not args.input_run:
+                console.print("[red]Feature e2e-automation butuh --input-run.[/red]")
+                return
+            run_feature_e2e_automation(
+                input_run=args.input_run,
+                executor_headless=executor_headless,
+                csv_sep=csv_sep,
+            )
+        else:
+            if not args.url:
+                console.print("[red]Feature visual-regression butuh --url.[/red]")
+                return
+            run_feature_visual_regression(url=args.url, use_auth=use_auth, run_name=args.run_name)
+
+        console.print("[bold green]Proses selesai (mode --feature).[/bold green]")
+        return
 
     if args.url or args.batch_file:
         if args.url and args.batch_file:

@@ -33,22 +33,14 @@
 <div class="dashboard-grid">
     <section class="dashboard-section card">
         <div class="section-header">
-            <h3><span class="icon">⏳</span> Active Jobs</h3>
-        </div>
-        <div class="job-list">
-            {% for job in active_jobs %}
-            <div class="job-item">
-                <div class="job-info">
-                    <span class="job-name">{{ ((job.payload or {}).get('url') or 'Run')[:30] }}...</span>
-                    <span class="job-status status-{{ job.status or 'queued' }}">{{ job.status or 'queued' }}</span>
-                </div>
-                <div class="progress-bar">
-                    <div class="progress-fill" style="width: {{ job.get('progress', 100) }}%"></div>
-                </div>
+            <div>
+                <p class="eyebrow">Live jobs</p>
+                <h3><span class="icon">⏳</span> Execution queue</h3>
             </div>
-            {% else %}
-            <p class="empty-msg">No active jobs yet.</p>
-            {% endfor %}
+            <button id="dashboard-refresh-jobs" class="ghost-button" type="button">Refresh queue</button>
+        </div>
+        <div id="dashboard-job-list" class="job-list">
+            <p class="empty-state">Loading…</p>
         </div>
     </section>
 
@@ -120,4 +112,88 @@
         </div>
     </section>
 </div>
+
+<script>
+(function () {
+  var container = document.getElementById("dashboard-job-list");
+  var refreshBtn = document.getElementById("dashboard-refresh-jobs");
+  if (!container) return;
+
+  function sourceLabelFromMode(m) {
+    if (typeof window.JobQueueUI !== "undefined" && window.JobQueueUI.sourceLabelFromMode) return window.JobQueueUI.sourceLabelFromMode(m);
+    var s = String(m || "").toLowerCase();
+    if (s === "vrt_scan") return "VRT Scan";
+    if (s === "automation_test") return "Automation";
+    return "Scenario";
+  }
+  function formatDuration(a, b) {
+    if (typeof window.JobQueueUI !== "undefined" && window.JobQueueUI.formatDurationSeconds) return window.JobQueueUI.formatDurationSeconds(a, b);
+    return "-";
+  }
+  function buildSection(job, isRunning) {
+    if (typeof window.JobQueueUI !== "undefined" && window.JobQueueUI.buildStepsAndLogSection) return window.JobQueueUI.buildStepsAndLogSection(job, isRunning, true);
+    var tokenUsed = (typeof window.JobQueueUI !== "undefined" && window.JobQueueUI.getTokenUsed) ? window.JobQueueUI.getTokenUsed(job.log_lines || []) : null;
+    return { stepsHtml: "", hasSteps: false, tokenUsed: tokenUsed };
+  }
+
+  function renderJobs(jobs) {
+    if (!container) return;
+    if (!Array.isArray(jobs) || !jobs.length) {
+      container.innerHTML = "<p class=\"empty-state\">No active jobs yet.</p>";
+      return;
+    }
+    container.innerHTML = "";
+    jobs.slice(0, 8).forEach(function (job) {
+      var statusValue = String(job.status || "").toLowerCase();
+      var isRunning = statusValue === "running" || statusValue === "queued";
+      var section = buildSection(job, isRunning);
+      var logLines = (typeof window.JobQueueUI !== "undefined" && window.JobQueueUI.cleanLogLines) ? window.JobQueueUI.cleanLogLines(job.log_lines || []) : (job.log_lines || []);
+      var lastErrorLine = statusValue === "failed" ? [].slice.call(logLines).reverse().find(function (line) { return /error|failed|traceback/i.test(String(line || "")); }) : "";
+      var card = document.createElement("article");
+      card.className = "job-card job-" + statusValue;
+      card.innerHTML =
+        "<header>" +
+          "<div class=\"job-id-group\"><strong>" + String((job.payload && job.payload.url) || "-") + "</strong>" +
+          (isRunning ? "<div class=\"ai-thinking-group\"><span class=\"spinner\"></span><span>Running</span></div>" : "") + "</div>" +
+          "<div class=\"job-header-actions\">" +
+          (isRunning ? "<button class=\"inline-mini-button danger\" type=\"button\" data-cancel-job=\"" + (job.id || "") + "\">Cancel</button>" : "") +
+          (!isRunning ? "<span class=\"status-indicator status-" + statusValue + "\">" + statusValue + "</span>" : "") + "</div></header>" +
+        "<div class=\"job-meta\">" +
+          "<span class=\"panel-badge\">Source: " + sourceLabelFromMode(job.payload && job.payload.mode) + "</span>" +
+          "<span class=\"panel-badge\">Started: " + String(job.created_at || "-") + "</span>" +
+          "<span class=\"panel-badge\">Duration: " + formatDuration(job.created_at, job.updated_at) + "</span></div>" +
+        (lastErrorLine ? "<p class=\"job-error-summary\">" + String(lastErrorLine).replace(/</g, "&lt;") + "</p>" : "") +
+        (section.hasSteps ? "<div class=\"job-steps-list\">" + section.stepsHtml + "</div>" : "") +
+        (section.tokenUsed != null ? "<p class=\"job-token-used\">Tokens used: <strong>" + Number(section.tokenUsed).toLocaleString() + "</strong></p>" : "") +
+        (job.run_name && statusValue === "completed" ? "<p class=\"job-cta-detail\"><a class=\"inline-link\" href=\"/runs/" + encodeURIComponent(String(job.run_name).trim()) + "\">File ready. View test details</a></p>" : "") + "\n";
+      container.appendChild(card);
+      card.querySelectorAll("[data-cancel-job]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var id = btn.getAttribute("data-cancel-job");
+          if (!id || btn.disabled) return;
+          if (!confirm("Cancel this job?")) return;
+          btn.disabled = true;
+          btn.textContent = "Cancelling…";
+          fetch("/api/jobs/" + id + "/cancel", { method: "POST" }).then(function (r) { return r.json(); }).then(function (p) {
+            if (p && p.ok) { btn.textContent = "Cancelled"; loadJobs(); } else { btn.disabled = false; btn.textContent = "Cancel"; }
+          }).catch(function () { btn.disabled = false; btn.textContent = "Cancel"; });
+        });
+      });
+    });
+  }
+
+  function loadJobs() {
+    if (!container) return;
+    fetch("/api/jobs").then(function (r) { return r.json(); }).then(function (data) {
+      var list = Array.isArray(data.jobs) ? data.jobs : [];
+      renderJobs(list);
+    }).catch(function () {
+      container.innerHTML = "<p class=\"empty-state\">Failed to load queue.</p>";
+    });
+  }
+
+  if (refreshBtn) refreshBtn.addEventListener("click", loadJobs);
+  loadJobs();
+})();
+</script>
 {% endblock %}

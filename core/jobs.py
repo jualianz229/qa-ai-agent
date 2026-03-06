@@ -20,6 +20,7 @@ jobs_lock = threading.Lock()
 _JOBS_FILE = RESULT_DIR / "jobs.json"
 jobs: dict[str, dict] = load_json_file(_JOBS_FILE) if _JOBS_FILE.exists() else {}
 active_processes: dict[str, subprocess.Popen] = {}
+_log_buffer_counts: dict[str, int] = {}
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 def _save_jobs_locked():
@@ -34,9 +35,16 @@ def get_job(job_id: str) -> dict:
         return json.loads(json.dumps(job))
 
 
-def get_all_jobs() -> list[dict]:
+def get_all_jobs(*, feature: str | None = None, mode: str | None = None) -> list[dict]:
+    """Return all jobs, optionally filtered by feature or mode for traceability."""
     with jobs_lock:
-        items = [json.loads(json.dumps(job)) for job in jobs.values()]
+        items = [dict(job) for job in jobs.values()]
+    if feature:
+        f = str(feature).strip().lower()
+        items = [j for j in items if str((j.get("payload") or {}).get("feature") or "").strip().lower() == f]
+    if mode:
+        m = str(mode).strip().lower()
+        items = [j for j in items if str((j.get("payload") or {}).get("mode") or "").strip().lower() == m]
     for job in items:
         status = str(job.get("status", "")).strip().lower()
         job["progress"] = 100 if status in {"completed", "failed"} else 50
@@ -52,9 +60,13 @@ def append_job_log(job_id: str, line: str) -> None:
         job["log_lines"].append(line)
         job["log_lines"] = job["log_lines"][-1500:]
         job["updated_at"] = datetime.now().isoformat(timespec="seconds")
-        # Save every 50 lines or so to avoid extreme disk I/O, but to be simple we save per line
-        # Alternatively, rely on update_job and create_job for metadata persistence
-        _save_jobs_locked()
+        
+        # Windows I/O optimization: Only save every 20 lines to avoid PermissionErrors 
+        # (Access Denied) during high-frequency logging.
+        _log_buffer_counts[job_id] = _log_buffer_counts.get(job_id, 0) + 1
+        if _log_buffer_counts[job_id] >= 20:
+            _save_jobs_locked()
+            _log_buffer_counts[job_id] = 0
 
 
 def update_job(job_id: str, **fields) -> None:
@@ -155,12 +167,15 @@ def cancel_job(job_id: str) -> bool:
     with jobs_lock:
         process = active_processes.get(job_id)
         if not process:
-            # Maybe it's queued but not running yet?
-            if job_id in jobs and jobs[job_id].get("status") == "queued":
-                jobs[job_id]["status"] = "failed"
-                jobs[job_id]["log_lines"].append("[CANCELLED] Job removed from queue.")
-                _save_jobs_locked()
-                return True
+            # If it's queued or marked as running but we don't have a process handle 
+            # (likely due to app restart), force it to a failed/cancelled state.
+            if job_id in jobs:
+                current_status = jobs[job_id].get("status")
+                if current_status in {"queued", "running"}:
+                    jobs[job_id]["status"] = "failed"
+                    jobs[job_id]["log_lines"].append("[CANCELLED] Job stopped (process handle lost or not running).")
+                    _save_jobs_locked()
+                    return True
             return False
             
     try:
@@ -211,7 +226,7 @@ def is_duplicate_recent_job(payload: dict, cooldown_seconds: int = 10) -> tuple[
     now = datetime.now()
     target_signature = job_payload_signature(payload)
     with jobs_lock:
-        job_items = [json.loads(json.dumps(item)) for item in jobs.values()]
+        job_items = [dict(j) for j in jobs.values()]
     for job in job_items:
         status = str(job.get("status", "")).strip().lower()
         if status not in {"queued", "running"}:
@@ -228,37 +243,74 @@ def is_duplicate_recent_job(payload: dict, cooldown_seconds: int = 10) -> tuple[
 
 
 def run_job(job_id: str, payload: dict) -> None:
-    # This function is a placeholder and will be expanded to handle different job types.
-    # For now, it only runs the basic 'agent.py' command.
-    command = [
-        sys.executable,
-        str(ROOT_DIR / "agent.py"),
-        "--url",
-        payload["url"],
-        "--run-name",
-        payload["run_name"],
-        "--csv-sep",
-        payload["csv_sep"],
-        "--crawl-limit",
-        str(payload["crawl_limit"]),
-    ]
-    if payload.get("template_path"):
-        command.extend(["--instruction-file", payload["template_path"]])
-    if payload.get("instruction"):
-        command.extend(["--instruction", payload["instruction"]])
-    if payload.get("use_auth"):
-        command.append("--use-auth")
-    if not payload.get("adaptive_recrawl", True):
-        command.append("--disable-adaptive-recrawl")
-    if payload.get("run_executor"):
-        command.append("--run-executor")
-    if payload.get("executor_headed"):
-        command.append("--executor-headed")
+    """Run agent: per-feature (Case Generator / Visual Regression) or full pipeline."""
+    feature = (payload.get("feature") or "").strip()
+    mode = (payload.get("mode") or "").strip().lower()
+
+    if feature == "case-generator":
+        command = [
+            sys.executable,
+            str(ROOT_DIR / "agent.py"),
+            "--feature", "case-generator",
+            "--url", str(payload.get("url", "")),
+            "--run-name", str(payload.get("run_name", "")),
+            "--csv-sep", str(payload.get("csv_sep", ",")),
+            "--crawl-limit", str(max(1, min(int(payload.get("crawl_limit", 3)), 10))),
+        ]
+        if payload.get("template_path"):
+            command.extend(["--instruction-file", payload["template_path"]])
+        if payload.get("instruction"):
+            command.extend(["--instruction", payload["instruction"]])
+        if payload.get("use_auth"):
+            command.append("--use-auth")
+        if not payload.get("adaptive_recrawl", True):
+            command.append("--disable-adaptive-recrawl")
+    elif mode == "vrt_scan":
+        command = [
+            sys.executable,
+            str(ROOT_DIR / "agent.py"),
+            "--feature", "visual-regression",
+            "--url", str(payload.get("url", "")),
+            "--run-name", str(payload.get("run_name", "")),
+            "--csv-sep", ",",
+            "--crawl-limit", "1",
+        ]
+        if payload.get("use_auth"):
+            command.append("--use-auth")
+    else:
+        command = [
+            sys.executable,
+            str(ROOT_DIR / "agent.py"),
+            "--url", str(payload.get("url", "")),
+            "--run-name", str(payload.get("run_name", "")),
+            "--csv-sep", str(payload.get("csv_sep", ",")),
+            "--crawl-limit", str(payload.get("crawl_limit", 3)),
+        ]
+        if payload.get("template_path"):
+            command.extend(["--instruction-file", payload["template_path"]])
+        if payload.get("instruction"):
+            command.extend(["--instruction", payload["instruction"]])
+        if payload.get("use_auth"):
+            command.append("--use-auth")
+        if not payload.get("adaptive_recrawl", True):
+            command.append("--disable-adaptive-recrawl")
+        if payload.get("run_executor"):
+            command.append("--run-executor")
+        if payload.get("executor_headed"):
+            command.append("--executor-headed")
 
     update_job(job_id, status="running", command=command)
-    exit_code = run_logged_process(job_id, command, str(ROOT_DIR))
-    status = "completed" if exit_code == 0 else "failed"
-    update_job(job_id, status=status, run_name=payload["run_name"], exit_code=exit_code)
+    try:
+        exit_code = run_logged_process(job_id, command, str(ROOT_DIR))
+        status = "completed" if exit_code == 0 else "failed"
+        update_job(job_id, status=status, run_name=payload["run_name"], exit_code=exit_code)
+    except Exception as exc:
+        logger.exception("Job %s failed with exception", job_id)
+        try:
+            append_job_log(job_id, f"[ERROR] {type(exc).__name__}: {exc}")
+            update_job(job_id, status="failed", run_name=payload.get("run_name"), exit_code=-1)
+        except Exception:
+            pass
 
 
 def create_job(payload: dict) -> dict:

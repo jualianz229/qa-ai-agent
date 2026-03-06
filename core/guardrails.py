@@ -85,6 +85,12 @@ def build_task_contract(
     allowed_terms.extend(allowed.get("flow_names", []))
     allowed_terms.extend(allowed.get("field_semantics", []))
     allowed_terms.extend(allowed.get("field_aliases", []))
+    for ext_key in (
+        "test_dimensions", "edge_and_error_states", "user_states_and_roles", "multi_step_flows",
+        "dynamic_components", "api_contracts", "viewports", "accessibility_focus",
+        "input_validation_focus", "priority_and_risk_areas",
+    ):
+        allowed_terms.extend(_clean_string_list(page_scope.get(ext_key, []) or []))
 
     instruction_contract = compile_instruction_contract(custom_instruction, page_facts)
     instruction_focus_terms = _clean_string_list(
@@ -241,6 +247,18 @@ def validate_page_scope(
     task_contract = build_task_contract(page_model, page_scope, page_info, custom_instruction=custom_instruction)
     issues = []
 
+    _scope_optional_array_keys = (
+        "test_dimensions",
+        "edge_and_error_states",
+        "user_states_and_roles",
+        "multi_step_flows",
+        "dynamic_components",
+        "api_contracts",
+        "viewports",
+        "accessibility_focus",
+        "input_validation_focus",
+        "priority_and_risk_areas",
+    )
     sanitized = {
         "page_type": _normalize_text(page_scope.get("page_type", "")),
         "primary_goal": _normalize_text(page_scope.get("primary_goal", "")),
@@ -251,6 +269,12 @@ def validate_page_scope(
         "scope_summary": _normalize_text(page_scope.get("scope_summary", "")),
         "confidence": _coerce_confidence(page_scope.get("confidence", 0.0)),
     }
+    for key in _scope_optional_array_keys:
+        val = page_scope.get(key)
+        if val is not None and isinstance(val, list):
+            sanitized[key] = _clean_string_list(val)[:12]
+        else:
+            sanitized[key] = []
 
     if not sanitized["page_type"]:
         sanitized["page_type"] = _infer_page_type(allowed["page_facts"])

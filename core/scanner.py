@@ -104,6 +104,7 @@ class Scanner:
                         f"{safe_domain}_{index}",
                         allow_spider=False,
                         run_dir=run_dir,
+                        capture_visual_baseline=False,
                     )
                     crawled_pages.append(child_info)
 
@@ -136,7 +137,17 @@ class Scanner:
         self._print_scan_summary(merged_info)
         return project_info, merged_info, ""
 
-    def _scan_single_page(self, context, url: str, safe_name: str, allow_spider: bool, run_dir: Path | None = None) -> tuple[dict, str, str]:
+    def _scan_single_page(
+        self,
+        context,
+        url: str,
+        safe_name: str,
+        allow_spider: bool,
+        run_dir: Path | None = None,
+        *,
+        capture_visual_baseline: bool = True,
+    ) -> tuple[dict, str, str]:
+        """Scan one page. Set capture_visual_baseline=False for linked pages to avoid redundant screenshots (merge uses only root visual)."""
         page = context.new_page()
         info = self._empty_page_info(url)
 
@@ -185,10 +196,15 @@ class Scanner:
         )
         info["runtime_signals"]["stateful_probe_count"] = len(info["discovered_states"])
         info["page_fingerprint"]["discovered_state_count"] = len(info["discovered_states"])
-        info["visual_snapshot"] = self._capture_visual_snapshot(page)
-        render_bundle = self._capture_visual_render_variants(page, safe_name, run_dir)
-        info["visual_render_artifact"] = render_bundle.get("primary_artifact", "")
-        info["visual_render_variants"] = render_bundle.get("variants", [])
+        if capture_visual_baseline:
+            info["visual_snapshot"] = self._capture_visual_snapshot(page)
+            render_bundle = self._capture_visual_render_variants(page, safe_name, run_dir)
+            info["visual_render_artifact"] = render_bundle.get("primary_artifact", "")
+            info["visual_render_variants"] = render_bundle.get("variants", [])
+        else:
+            info["visual_snapshot"] = {}
+            info["visual_render_artifact"] = ""
+            info["visual_render_variants"] = []
 
         page.close()
         info["apis"] = list(dict.fromkeys(info["apis"]))[:10]
@@ -863,14 +879,16 @@ class Scanner:
     def save_csv_scenarios(self, data_list: list, project_info: dict, sep: str = ",") -> Path:
         output = io.StringIO()
         if data_list:
-            fieldnames = [
-                "ID", "Module", "Category", "Test Type", "Risk Rating", "Anchored Selector", "Title", "Precondition",
+            base_fieldnames = [
+                "ID", "Language App", "Module", "Category", "Test Type", "Risk Rating", "Anchored Selector", "Title", "Precondition",
                 "Steps to Reproduce", "Expected Result", "Actual Result", "Severity",
                 "Priority", "Evidence", "Automation",
             ]
             actual_keys = list(data_list[0].keys())
-            if not all(field in actual_keys for field in fieldnames[:4]):
-                fieldnames = actual_keys
+            fieldnames = list(base_fieldnames)
+            for k in actual_keys:
+                if k not in fieldnames:
+                    fieldnames.append(k)
 
             writer = csv.DictWriter(output, fieldnames=fieldnames, delimiter=sep, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
             writer.writeheader()

@@ -3,102 +3,258 @@
 {% block title %}Run Detail | TracePilot{% endblock %}
 
 {% block header_kicker %}Execution Run{% endblock %}
-{% block header_title %}{{ (run.get('run_name') or '')[:20] }}{% if (run.get('run_name') or '')|length > 20 %}...{% endif %}{% endblock %}
+{% block header_title %}{{ (run.get('run_name') or '')[:20] }}{% if (run.get('run_name') or '')|length > 20 %}...{%
+endif %}{% endblock %}
 {% block header_subtitle %}{{ (run.get('page_type') or '')|upper }} run on {{ run.get('created_at', '') }}{% endblock %}
 
 {% block content %}
 <div class="stats-grid">
-    <div class="stat-card">
-        <div class="stat-label">Total Cases</div>
-        <div class="stat-value">{{ run.get('total_cases', 0) }}</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-label">Passed</div>
-        <div class="stat-value highlight">{{ (run.status_counts or {}).get('passed', 0) }}</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-label">Failed</div>
-        <div class="stat-value danger">{{ (run.status_counts or {}).get('failed', 0) }}</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-label">Safety Index</div>
-        <div
-            class="stat-value {% if run.get('safety_index', 0) < 70 %}danger{% elif run.get('safety_index', 0) < 90 %}warning{% else %}highlight{% endif %}">
-            {{ run.get('safety_index', 0) }}%</div>
-    </div>
+  <div class="stat-card">
+    <div class="stat-label">Total Cases</div>
+    <div class="stat-value">{{ run.get('total_cases', 0) }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Passed</div>
+    <div class="stat-value highlight">{{ (run.status_counts or {}).get('passed', 0) }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Failed</div>
+    <div class="stat-value danger">{{ (run.status_counts or {}).get('failed', 0) }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Safety Index</div>
+    <div
+      class="stat-value {% if run.get('safety_index', 0) < 70 %}danger{% elif run.get('safety_index', 0) < 90 %}warning{% else %}highlight{% endif %}">
+      {{ run.get('safety_index', 0) }}%</div>
+  </div>
 </div>
 
 <div class="dashboard-grid">
-    <section class="dashboard-section card" style="grid-column: span 2;">
-        <div class="section-header">
-            <h3><span class="icon">📋</span> Execution Cases</h3>
-        </div>
-        <div class="table-shell">
-            <table class="table-minimal">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Title</th>
-                        <th>Status</th>
-                        <th>Duration</th>
-                        <th>Traceability</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for case in (run.get('case_rows') or []) %}
-                    <tr>
-                        <td class="mono">{{ case.get('id', '') }}</td>
-                        <td>{{ case.get('title', '') }}</td>
-                        <td>
-                            <span
-                                class="badge {% if case.get('status') == 'passed' %}badge-success{% elif case.get('status') == 'failed' %}badge-danger{% else %}badge-warning{% endif %}">
-                                {{ (case.get('status') or '')|upper }}
-                            </span>
-                        </td>
-                        <td>{{ case.get('duration', 0) }}s</td>
-                        <td>{{ case.get('traceability_id', '') }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
+  <section class="dashboard-section card execution-cases-section" style="grid-column: span 2;">
+    <div class="section-header section-header-with-actions">
+      <h3><span class="icon">📋</span> Execution Cases</h3>
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <button type="button" id="run-detail-download-csv" class="ghost-button">Download</button>
+        <button type="button" id="run-detail-save-csv" class="primary-button success-button"
+          style="display: none;">Save</button>
+      </div>
+    </div>
+    <p id="run-detail-save-status" class="run-detail-save-status" role="status" aria-live="polite"></p>
+    <div class="table-shell table-shell-resizable" id="run-detail-table-shell">
+      <table class="table-minimal table-run-detail table-editable" id="run-detail-cases-table">
+        <thead>
+          <tr>
+            <th data-field="ID">ID</th>
+            <th data-field="Language App">Language App</th>
+            <th data-field="Module">Module</th>
+            <th data-field="Category">Category</th>
+            <th data-field="Title">Title</th>
+            <th data-field="Precondition">Precondition</th>
+            <th data-field="Steps to Reproduce">Steps to Reproduce</th>
+            <th data-field="Expected Result">Expected Result</th>
+            <th data-field="Actual Result">Actual Result</th>
+            <th data-field="Severity">Severity</th>
+            <th data-field="Priority">Priority</th>
+            <th data-field="Evidence">Evidence</th>
+            <th data-field="Status" class="cell-status">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for case in (run.get('case_rows') or []) %}
+          {% set fm = case.get('field_map') or {} %}
+          <tr data-case-id="{{ fm.get('ID', case.get('id', '')) }}">
+            <td class="mono cell-editable" contenteditable="true" data-field="ID">{{ fm.get('ID', case.get('id', '')) }}
+            </td>
+            <td class="cell-editable" contenteditable="true" data-field="Language App">{{ fm.get('Language App', '') }}
+            </td>
+            <td class="cell-editable" contenteditable="true" data-field="Module">{{ fm.get('Module', case.get('module',
+              '')) }}</td>
+            <td class="cell-editable" contenteditable="true" data-field="Category">{{ fm.get('Category',
+              case.get('category', '')) }}</td>
+            <td class="cell-editable" contenteditable="true" data-field="Title">{{ fm.get('Title', case.get('title',
+              '')) }}</td>
+            <td class="cell-editable cell-steps" contenteditable="true" data-field="Precondition">{{
+              fm.get('Precondition', case.get('precondition', '')) }}</td>
+            <td class="cell-editable cell-steps" contenteditable="true" data-field="Steps to Reproduce">{{ fm.get('Steps
+              to Reproduce', '') }}</td>
+            <td class="cell-editable" contenteditable="true" data-field="Expected Result">{{ fm.get('Expected Result',
+              case.get('expected_result', '')) }}</td>
+            <td class="cell-editable" contenteditable="true" data-field="Actual Result">{{ fm.get('Actual Result',
+              case.get('actual_result', '')) }}</td>
+            <td data-field="Severity">
+              {% set sev_val = (fm.get('Severity', case.get('severity', '')))|string|lower|trim %}
+              <select class="cell-select">
+                <option value="Critical" {% if sev_val=='critical' %}selected{% endif %}>Critical</option>
+                <option value="Major" {% if sev_val=='major' %}selected{% endif %}>Major</option>
+                <option value="Minor" {% if sev_val=='minor' %}selected{% endif %}>Minor</option>
+                <option value="Trivial" {% if sev_val=='trivial' %}selected{% endif %}>Trivial</option>
+              </select>
+            </td>
+            <td data-field="Priority">
+              {% set pri_val = (fm.get('Priority', case.get('priority', '')))|string|upper|trim %}
+              <select class="cell-select">
+                <option value="P1" {% if pri_val=='P1' %}selected{% endif %}>P1</option>
+                <option value="P2" {% if pri_val=='P2' %}selected{% endif %}>P2</option>
+                <option value="P3" {% if pri_val=='P3' %}selected{% endif %}>P3</option>
+                <option value="P4" {% if pri_val=='P4' %}selected{% endif %}>P4</option>
+              </select>
+            </td>
+            <td class="cell-editable cell-evidence" contenteditable="true" data-field="Evidence">{{ fm.get('Evidence',
+              case.get('evidence', '')) }}</td>
+            <td data-field="Status" class="cell-status">
+              {% set st_val = (fm.get('Status', case.get('status', '')))|string|lower|trim %}
+              <select class="cell-select">
+                <option value="Untested" {% if st_val=='untested' or not st_val or st_val=='none' %}selected{% endif %}>
+                  Untested</option>
+                <option value="Passed" {% if st_val=='passed' %}selected{% endif %}>Passed</option>
+                <option value="Failed" {% if st_val=='failed' %}selected{% endif %}>Failed</option>
+                <option value="Blocked" {% if st_val=='blocked' %}selected{% endif %}>Blocked</option>
+                <option value="Skipped" {% if st_val=='skipped' %}selected{% endif %}>Skipped</option>
+              </select>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-    {% if (run.get('text_summaries') or {}).get('test_plan_summary') or (run.get('text_summaries') or {}).get('execution_summary') %}
-    <section class="dashboard-section card">
-        <div class="section-header">
-            <h3><span class="icon">📄</span> Run Summaries</h3>
-        </div>
-        <div class="summary-content">
-            {% if (run.get('text_summaries') or {}).get('test_plan_summary') %}
-            <h4>Test Plan</h4>
-            <pre class="artifact-text">{{ (run.get('text_summaries') or {}).get('test_plan_summary', '') }}</pre>
-            {% endif %}
+  {% if (run.get('text_summaries') or {}).get('test_plan_summary') or (run.get('text_summaries') or
+  {}).get('execution_summary') %}
+  <section class="dashboard-section card">
+    <div class="section-header">
+      <h3><span class="icon">📄</span> Run Summaries</h3>
+    </div>
+    <div class="summary-content">
+      {% if (run.get('text_summaries') or {}).get('test_plan_summary') %}
+      <h4>Test Plan</h4>
+      <pre class="artifact-text">{{ (run.get('text_summaries') or {}).get('test_plan_summary', '') }}</pre>
+      {% endif %}
 
-            {% if (run.get('text_summaries') or {}).get('execution_summary') %}
-            <h4>Execution Summary</h4>
-            <pre class="artifact-text">{{ (run.get('text_summaries') or {}).get('execution_summary', '') }}</pre>
-            {% endif %}
-        </div>
-    </section>
-    {% endif %}
-
-    <section class="dashboard-section card">
-        <div class="section-header">
-            <h3><span class="icon">🛡️</span> Safety Recommendations</h3>
-        </div>
-        <div class="risk-list">
-            {% for rec in (run.get('safety_recommendations') or []) %}
-            <div class="risk-item">
-                <div class="risk-icon warning">!</div>
-                <div class="risk-content">
-                    <p class="risk-meta">{{ rec }}</p>
-                </div>
-            </div>
-            {% else %}
-            <p class="empty-msg">No safety risks identified for this run.</p>
-            {% endfor %}
-        </div>
-    </section>
+      {% if (run.get('text_summaries') or {}).get('execution_summary') %}
+      <h4>Execution Summary</h4>
+      <pre class="artifact-text">{{ (run.get('text_summaries') or {}).get('execution_summary', '') }}</pre>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
 </div>
+
+<script>
+  (function () {
+    var runName = "{{ run.get('run_name', '') }}";
+    var saveBtn = document.getElementById("run-detail-save-csv");
+    var downloadBtn = document.getElementById("run-detail-download-csv");
+    var statusEl = document.getElementById("run-detail-save-status");
+    var table = document.getElementById("run-detail-cases-table");
+    if (!table) return;
+
+    function getHeaders() {
+      var headers = [];
+      table.querySelectorAll("thead th[data-field]").forEach(function (th) {
+        headers.push(th.getAttribute("data-field"));
+      });
+      return headers;
+    }
+    function getRows() {
+      var headers = getHeaders();
+      var rows = [];
+      table.querySelectorAll("tbody tr").forEach(function (tr) {
+        var row = {};
+        tr.querySelectorAll("td[data-field]").forEach(function (td) {
+          var key = td.getAttribute("data-field");
+          if (key) {
+            var sel = td.querySelector("select");
+            if (sel) {
+              row[key] = sel.value;
+            } else {
+              row[key] = (td.textContent || "").trim();
+            }
+          }
+        });
+        if (row.ID) rows.push(row);
+      });
+      return rows;
+    }
+
+    // Trigger Save button appearance on edit
+    function markUnsaved() {
+      if (saveBtn) {
+        saveBtn.style.display = 'inline-block';
+        if (statusEl) {
+          statusEl.textContent = "Unsaved changes";
+          statusEl.classList.add("show");
+        }
+      }
+    }
+    table.addEventListener('input', markUnsaved);
+    table.addEventListener('change', markUnsaved);
+
+    if (saveBtn) {
+      saveBtn.addEventListener("click", function () {
+        var headers = getHeaders();
+        var rows = getRows();
+        if (!headers.length || !rows.length) {
+          if (statusEl) statusEl.textContent = "No data to save.";
+          return;
+        }
+        saveBtn.disabled = true;
+        if (statusEl) statusEl.textContent = "Saving…";
+        fetch("/api/runs/" + encodeURIComponent(runName) + "/csv-save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ headers: headers, rows: rows })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            saveBtn.disabled = false;
+            if (data && data.ok) {
+              if (statusEl) {
+                statusEl.textContent = "Saved " + (data.saved_rows || 0) + " rows.";
+                setTimeout(function () { statusEl.classList.remove("show"); }, 3000);
+              }
+              saveBtn.style.display = 'none'; // hide it again after saving
+            } else {
+              if (statusEl) {
+                statusEl.textContent = (data && data.error) ? data.error : "Save failed.";
+                statusEl.classList.add("show");
+              }
+            }
+          })
+          .catch(function () {
+            saveBtn.disabled = false;
+            if (statusEl) statusEl.textContent = "Save failed.";
+          });
+      });
+    }
+
+    if (downloadBtn) {
+      downloadBtn.addEventListener('click', function () {
+        var headers = getHeaders();
+        var rows = getRows();
+        if (!headers.length || !rows.length) return;
+
+        var csvContent = "data:text/csv;charset=utf-8,";
+        // Append headers 
+        csvContent += headers.map(function (h) { return '"' + h.replace(/"/g, '""') + '"'; }).join(",") + "\n";
+        // Append rows
+        rows.forEach(function (row) {
+          var rowArr = headers.map(function (h) {
+            var val = row[h] || "";
+            return '"' + String(val).replace(/"/g, '""') + '"';
+          });
+          csvContent += rowArr.join(",") + "\n";
+        });
+
+        var encodedUri = encodeURI(csvContent);
+        var link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", runName + "_cases.csv");
+        document.body.appendChild(link); // Required for Firefox
+        link.click();
+        document.body.removeChild(link);
+      });
+    }
+  })();
+</script>
 {% endblock %}

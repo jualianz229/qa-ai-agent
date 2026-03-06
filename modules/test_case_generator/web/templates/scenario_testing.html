@@ -34,6 +34,14 @@
             <option value="no">No</option>
           </select>
         </div>
+        <div class="nested-setting">
+          <label for="scenario-csv-sep">Format CSV (Excel)</label>
+          <select id="scenario-csv-sep" name="csv_sep">
+            <option value="," selected>Koma (,) – Excel umum</option>
+            <option value=";">Titik koma (;) – Excel regional</option>
+          </select>
+          <p class="field-inline-note">Pilih pemisah kolom agar CSV terbuka benar di Excel.</p>
+        </div>
         <div class="form-actions form-actions-inline">
           <div class="form-actions-buttons">
             <button class="primary-button" type="submit">Generate Test Cases</button>
@@ -148,6 +156,7 @@
           custom_template: customTemplate?.value || "",
           crawl_limit: document.getElementById("scenario-crawl-limit")?.value || "3",
           adaptive_recrawl: document.getElementById("scenario-recrawl")?.value || "yes",
+          csv_sep: document.getElementById("scenario-csv-sep")?.value || ",",
         };
         window.sessionStorage.setItem(draftStorageKey, JSON.stringify(payload));
       } catch (_error) {
@@ -167,53 +176,12 @@
         if (crawlEl && payload?.crawl_limit) crawlEl.value = String(payload.crawl_limit);
         const recrawlEl = document.getElementById("scenario-recrawl");
         if (recrawlEl && payload?.adaptive_recrawl) recrawlEl.value = String(payload.adaptive_recrawl);
+        const csvSepEl = document.getElementById("scenario-csv-sep");
+        if (csvSepEl && payload?.csv_sep) csvSepEl.value = String(payload.csv_sep);
         return payload;
       } catch (_error) {
         return null;
       }
-    }
-
-    function sourceLabelFromMode(modeValue) {
-      const mode = String(modeValue || "").toLowerCase();
-      if (mode === "vrt_scan") return "VRT Scan";
-      if (mode === "automation_test") return "Automation";
-      if (mode === "retry_failed") return "Retry Failed";
-      if (mode === "safe_rerun") return "Safe Rerun";
-      return "Scenario";
-    }
-
-    function cleanLogLines(lines) {
-      if (!Array.isArray(lines)) return [];
-      const cleaned = [];
-      let lastSpinnerBase = "";
-
-      for (const line of lines) {
-        let text = String(line || "").trim();
-        // Detect common spinner frames: they usually start with a spinner char (+ / - | \) and then a fixed message
-        const spinnerMatch = text.match(/^[\-\|\\\/]\s*(AI\s+.*?\.\.\.)/i);
-
-        if (spinnerMatch) {
-          const base = spinnerMatch[1].toLowerCase();
-          // Strip the spinner character (e.g., "\ AI checking..." -> "AI checking...")
-          const cleanText = text.replace(/^[\-\|\\\/]\s*/, "");
-
-          if (base === lastSpinnerBase) {
-            // It's the same operation, update the last line instead of adding new one
-            if (cleaned.length > 0) {
-              cleaned[cleaned.length - 1] = cleanText;
-            } else {
-              cleaned.push(cleanText);
-            }
-            continue;
-          }
-          lastSpinnerBase = base;
-          cleaned.push(cleanText);
-        } else {
-          lastSpinnerBase = "";
-          cleaned.push(line);
-        }
-      }
-      return cleaned;
     }
 
     function renderInlineJobs(jobs) {
@@ -222,22 +190,20 @@
         inlineJobs.innerHTML = '<p class="empty-state">No active jobs yet.</p>';
         return;
       }
+      const sourceLabelFromMode = window.JobQueueUI ? window.JobQueueUI.sourceLabelFromMode : function (m) { return (m === "vrt_scan" ? "VRT Scan" : m === "automation_test" ? "Automation" : "Scenario"); };
+      const formatDurationSeconds = window.JobQueueUI ? window.JobQueueUI.formatDurationSeconds : function (a, b) { return "-"; };
       inlineJobs.innerHTML = "";
       jobs.slice(0, 8).forEach((job) => {
-        const rawLines = Array.isArray(job.log_lines) ? job.log_lines : [];
-        const logLines = cleanLogLines(rawLines);
-
-        const isLogCollapsed = logLines.length > 40;
-        const fullLog = logLines.join("\n");
-        const previewLog = isLogCollapsed ? logLines.slice(0, 40).join("\n") : fullLog;
-        const isEmptyLog = !previewLog;
-        const logText = previewLog || "Waiting for log output...";
+        const statusValue = String(job.status || "").toLowerCase();
+        const isRunning = statusValue === "running" || statusValue === "queued";
+        const section = window.JobQueueUI && window.JobQueueUI.buildStepsAndLogSection
+          ? window.JobQueueUI.buildStepsAndLogSection(job, isRunning, true)
+          : { stepsHtml: "", hasSteps: false, tokenUsed: (window.JobQueueUI && window.JobQueueUI.getTokenUsed) ? window.JobQueueUI.getTokenUsed(job.log_lines || []) : null };
+        const hasSteps = section.hasSteps;
         const runName = String(job.run_name || "").trim();
         const sourceLabel = sourceLabelFromMode(job?.payload?.mode);
         const durationLabel = formatDurationSeconds(job?.created_at, job?.updated_at);
-        const statusValue = String(job.status || "").toLowerCase();
-        const isRunning = statusValue === "running" || statusValue === "queued";
-
+        const logLines = window.JobQueueUI && window.JobQueueUI.cleanLogLines ? window.JobQueueUI.cleanLogLines(job.log_lines || []) : (job.log_lines || []);
         const lastErrorLine = statusValue === "failed"
           ? [...logLines].reverse().find((line) => /error|failed|traceback/i.test(String(line || "")))
           : "";
@@ -251,12 +217,12 @@
                 ${isRunning ? `
                 <div class="ai-thinking-group">
                   <span class="spinner"></span>
-                  <span>AI is thinking...</span>
+                  <span>Running</span>
                 </div>` : ""}
             </div>
             <div class="job-header-actions">
               ${isRunning ? `<button class="inline-mini-button danger" type="button" data-cancel-job="${job.id}">Cancel</button>` : ""}
-              <span class="status-indicator status-${statusValue}">${statusValue}</span>
+              ${!isRunning ? `<span class="status-indicator status-${statusValue}">${statusValue}</span>` : ""}
             </div>
           </header>
           <div class="job-meta">
@@ -265,32 +231,10 @@
             <span class="panel-badge">Duration: ${durationLabel}</span>
           </div>
           ${lastErrorLine ? `<p class="job-error-summary">${String(lastErrorLine)}</p>` : ""}
-          <div class="terminal-container">
-            <div class="terminal-header">
-                <span class="terminal-dot dot-red"></span>
-                <span class="terminal-dot dot-yellow"></span>
-                <span class="terminal-dot dot-green"></span>
-                <span class="terminal-title">tracepilot@agent:~</span>
-            </div>
-            <pre class="job-log-viewer ${isEmptyLog ? "is-empty" : ""}">${logText}</pre>
-          </div>
+          ${hasSteps ? `<div class="job-steps-list">${section.stepsHtml}</div>` : ""}
+          ${section.tokenUsed != null ? `<p class="job-token-used">Tokens used: <strong>${Number(section.tokenUsed).toLocaleString()}</strong></p>` : ""}
+          ${runName && statusValue === "completed" ? `<p class="job-cta-detail"><a class="inline-link" href="/runs/${encodeURIComponent(runName)}">File ready. View test details</a></p>` : ""}
         `;
-        const logView = card.querySelector(".job-log-viewer");
-        if (logView) {
-          // If this is the FIRST render or user is at the bottom, auto-scroll.
-          // Otherwise, stay where the user has manually scrolled.
-          const scrollThreshold = 100; // pixels from bottom to count as "at bottom"
-          const isAtBottom = (logView.scrollHeight - logView.scrollTop - logView.clientHeight) < scrollThreshold;
-
-          if (!logView.dataset.everScrolled || isAtBottom) {
-            // We need to wait for DOM to update if we were replacing everything,
-            // but here we are still inside the loop. Let's use requestAnimationFrame.
-            requestAnimationFrame(() => {
-              logView.scrollTop = logView.scrollHeight;
-            });
-            logView.dataset.everScrolled = "true";
-          }
-        }
         inlineJobs.appendChild(card);
       });
       inlineJobs.querySelectorAll("[data-copy-run-link]").forEach((button) => {
@@ -337,17 +281,17 @@
       if (!inlineJobs) return;
       let hasVisibleJobs = false;
       try {
-        const response = await fetch("/api/jobs");
+        const response = await fetch("/api/jobs?feature=case-generator");
         const payload = await response.json();
         if (!response.ok) {
           throw new Error(payload.error || "Failed to load queue.");
         }
-        const allJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
-        const activeJobs = allJobs.filter((job) => {
+        const moduleJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+        const activeJobs = moduleJobs.filter((job) => {
           const state = String(job?.status || "").toLowerCase();
           return state === "queued" || state === "running";
         });
-        const currentJob = currentScenarioJobId ? allJobs.find((job) => String(job?.id || "") === currentScenarioJobId) : null;
+        const currentJob = currentScenarioJobId ? moduleJobs.find((job) => String(job?.id || "") === currentScenarioJobId) : null;
         const visibleJobs = currentJob && !activeJobs.find((job) => String(job?.id || "") === String(currentJob.id || ""))
           ? [currentJob, ...activeJobs]
           : activeJobs;

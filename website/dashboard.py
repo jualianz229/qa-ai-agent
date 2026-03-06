@@ -311,7 +311,21 @@ def run_feedback_api(run_name: str):
 
 @app.get("/api/jobs")
 def jobs_api():
-    return jsonify({"jobs": get_all_jobs()})
+    try:
+        feature = request.args.get("feature", "").strip() or None
+        mode = request.args.get("mode", "").strip() or None
+        jobs_list = get_all_jobs(feature=feature, mode=mode)
+        scope = None
+        if feature:
+            scope = f"feature={feature}"
+        elif mode:
+            scope = f"mode={mode}"
+        if scope:
+            get_logger("website.dashboard").info("jobs list scope=%s count=%s", scope, len(jobs_list))
+        return jsonify({"jobs": jobs_list, "scope": scope})
+    except Exception as exc:
+        get_logger("website.dashboard").exception("jobs_api failed")
+        return jsonify({"jobs": [], "scope": None, "error": str(exc)}), 500
 
 
 @app.get("/api/jobs/<job_id>")
@@ -398,10 +412,13 @@ def run_csv_save_api(run_name: str):
             continue
         normalized_rows.append(item)
 
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=unique_headers)
-        writer.writeheader()
-        writer.writerows(normalized_rows)
+    try:
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=unique_headers)
+            writer.writeheader()
+            writer.writerows(normalized_rows)
+    except OSError as exc:
+        return jsonify({"ok": False, "error": f"Cannot write CSV: {exc}"}), 500
 
     return jsonify({"ok": True, "run_name": run_name, "saved_rows": len(normalized_rows)})
 

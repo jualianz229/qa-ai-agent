@@ -20,10 +20,11 @@ from core.instruction_templates import (
     update_instruction_template,
 )
 from core.jobs import create_job, get_all_jobs, get_job, is_duplicate_recent_job
-from core.utils import form_bool, normalize_input_url
+from core.utils import form_bool, normalize_input_url, is_automation_or_recovery_run
 from modules.test_case_generator.web.features.test_case_generator import (
     build_all_test_cases_context,
     build_test_case_generator_context,
+    build_scenario_results_context,
 )
 
 bp = Blueprint("test_case_generator", __name__, template_folder="../templates")
@@ -141,6 +142,29 @@ def runs_page():
     return render_template("runs.html", **context)
 
 
+@bp.get("/scenario-results")
+def scenario_results_page():
+    from core.dashboard_data import dashboard_metrics
+    sort_mode = request.args.get("sort", "latest").strip()
+    search_query = request.args.get("q", "").strip()
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+        
+    context = build_scenario_results_context(
+        result_dir=RESULT_DIR,
+        sort_mode=sort_mode,
+        list_runs=list_runs,
+        sort_runs=sort_runs,
+        is_automation_or_recovery_run=is_automation_or_recovery_run,
+        dashboard_metrics=dashboard_metrics,
+        search_query=search_query,
+        page=page,
+    )
+    return render_template("scenario_results.html", **context)
+
+
 # ---------------------------------------------------------------------------
 # API routes
 # ---------------------------------------------------------------------------
@@ -190,6 +214,7 @@ def create_scenario_job_api():
         **payload_base,
         "run_executor": False,
         "executor_headed": False,
+        "feature": "case-generator",
     }
 
     try:

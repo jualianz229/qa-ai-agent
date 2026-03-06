@@ -7,33 +7,41 @@
       "category": "Login",
       "test_type": "Positive",
       "automation_counts": {
-        "auto": 9
+        "auto": 36
       },
       "step_profiles": {
-        "open_url > fill > fill > click": 9
+        "open_url > fill > fill > click": 34,
+        "open_url > fill > fill > inspect": 1,
+        "open_url > fill > fill": 1
       },
       "expected_profiles": {
-        "url_change": 9
+        "url_change": 32,
+        "generic": 4
       },
       "example_titles": [
-        "Login with performance_glitch_user",
-        "Login with valid credentials",
-        "Successful Login - standard_user",
-        "Successful Login - test_user",
-        "Successful Login - performance_glitch_user"
+        "Successful Login with 'performance_glitch_user'",
+        "Successful Login with Valid Credentials",
+        "Verify Login button is enabled when both fields are populated",
+        "Successful Login - problem_user",
+        "Successful Login - performance_glitch_user",
+        "Successful Login - standard_user"
       ],
       "signatures": [
-        "frm_014::authentication::login_with_performance_glitch_user",
-        "frm_001::authentication::login_with_valid_credentials",
-        "frm_016::authentication::login_with_valid_credentials",
+        "frm_011::authentication::successful_login_with_performance_glitch_user",
+        "frm_001::authentication::successful_login_with_valid_credentials",
+        "frm_014::authentication::verify_login_button_is_enabled_when_both_fields_are_populated",
+        "frm_016::authentication::verify_login_button_is_enabled_when_both_fields_are_populated",
+        "frm_013::authentication::successful_login_problem_user",
+        "frm_010::authentication::successful_login_performance_glitch_user",
         "frm_001::authentication::successful_login_standard_user",
-        "frm_012::authentication::successful_login_test_user",
-        "frm_009::authentication::successful_login_performance_glitch_user",
-        "frm_015::authentication::successful_login_test_user",
-        "frm_007::authentication::successful_login_performance_glitch_user"
+        "frm_015::authentication::successful_login_problem_user",
+        "frm_011::authentication::successful_login_performance_glitch_user",
+        "frm_014::authentication::successful_login_problem_user",
+        "frm_008::authentication::successful_login_performance_glitch_user",
+        "frm_015::authentication::successful_login_standard_user_password_case_sensitivity"
       ],
-      "hits": 9,
-      "last_used_at": "2026-03-06T03:49:32"
+      "hits": 36,
+      "last_used_at": "2026-03-06T17:54:47"
     },
     "authentication_form::authentication::negative": {
       "pattern_key": "authentication_form::authentication::negative",
@@ -42,85 +50,117 @@
       "category": "Login",
       "test_type": "Negative",
       "automation_counts": {
-        "auto": 20
+        "auto": 58
       },
       "step_profiles": {
-        "open_url > fill > fill > click": 17,
+        "open_url > fill > fill > click": 55,
         "open_url > inspect > fill > click": 1,
         "open_url > fill > inspect > click": 1,
         "open_url > inspect > inspect > click": 1
       },
       "expected_profiles": {
-        "text_visible": 20
+        "text_visible": 54,
+        "generic": 4
       },
       "example_titles": [
-        "Login with valid username and invalid password",
-        "Login with invalid username and valid password",
-        "Login Failure - Both Username and Password Invalid",
-        "Login Failure - Invalid Password",
-        "Login Failure - Invalid Username",
-        "Password Field - Special Characters"
+        "Login with 'standard_user' and incorrect password",
+        "Login with 'test' user",
+        "Login with Invalid Password",
+        "Login with Invalid Username",
+        "Login with special characters in Password",
+        "Login with special characters in Username"
       ],
       "signatures": [
-        "frm_016::authentication::login_with_valid_username_and_invalid_password",
-        "frm_015::authentication::login_with_invalid_username_and_valid_password",
-        "frm_006::authentication::login_failure_both_username_and_password_invalid",
-        "frm_003::authentication::login_failure_invalid_password",
-        "frm_002::authentication::login_failure_invalid_username",
-        "frm_015::authentication::login_failure_both_username_and_password_invalid",
-        "frm_012::authentication::password_field_special_characters",
-        "frm_011::authentication::username_field_special_characters",
-        "frm_016::authentication::login_with_incorrect_case_username",
-        "frm_006::authentication::login_with_both_fields_empty",
-        "frm_005::authentication::login_with_empty_password",
-        "frm_004::authentication::login_with_empty_username"
+        "frm_016::authentication::login_with_standard_user_and_incorrect_password",
+        "frm_015::authentication::login_with_test_user",
+        "frm_003::authentication::login_with_invalid_password",
+        "frm_002::authentication::login_with_invalid_username",
+        "frm_011::authentication::login_with_special_characters_in_password",
+        "frm_010::authentication::login_with_special_characters_in_username",
+        "frm_002::authentication::login_with_invalid_credentials",
+        "frm_014::authentication::login_with_both_fields_exceeding_maximum_length",
+        "frm_003::authentication::login_with_valid_username_and_invalid_password",
+        "frm_011::authentication::login_with_invalid_username",
+        "frm_005::authentication::login_with_locked_out_user",
+        "frm_002::authentication::login_with_standard_user_and_incorrect_password"
       ],
-      "hits": 20,
-      "last_used_at": "2026-03-06T03:49:32"
+      "hits": 58,
+      "last_used_at": "2026-03-06T17:54:47"
     },
     "authentication_form::form_validation::negative": {
       "pattern_key": "authentication_form::form_validation::negative",
       "page_type": "authentication_form",
       "module": "form_validation",
-      "category": "Password",
+      "category": "Login",
       "test_type": "Negative",
       "automation_counts": {
-        "auto": 16
+        "auto": 113
       },
       "step_profiles": {
-        "open_url > inspect > fill > click": 2,
-        "open_url > fill > inspect > click": 2,
-        "open_url > fill > fill > click": 12
+        "open_url > inspect > fill > click": 13,
+        "open_url > fill > inspect > click": 13,
+        "open_url > fill > fill > click": 77,
+        "open_url > inspect > inspect > click": 4,
+        "open_url > fill > fill > inspect > click": 1,
+        "open_url > fill > inspect > fill > click": 1,
+        "open_url > inspect > fill": 2,
+        "open_url > fill > inspect": 2
       },
       "expected_profiles": {
-        "text_visible": 14,
-        "generic": 2
+        "text_visible": 107,
+        "generic": 6
       },
       "example_titles": [
-        "Password field - Long input",
-        "Username field - Long input",
+        "Password field - Maximum length",
         "Password field - Special characters",
         "Username field - Special characters",
-        "Password field - Leading/Trailing Spaces",
-        "Username field - Leading/Trailing Spaces"
+        "Verify Login button is disabled when Password field is empty",
+        "Verify Login button is disabled when Username field is empty",
+        "Login with Both Fields Empty"
       ],
       "signatures": [
-        "frm_010::form_validation::password_field_long_input",
-        "frm_009::form_validation::username_field_long_input",
-        "frm_008::form_validation::password_field_special_characters",
-        "frm_007::form_validation::username_field_special_characters",
-        "frm_013::form_validation::password_field_leading_trailing_spaces",
-        "frm_012::form_validation::username_field_leading_trailing_spaces",
-        "frm_005::form_validation::password_field_empty_input",
-        "frm_004::form_validation::username_field_empty_input",
-        "frm_014::form_validation::password_field_leading_trailing_spaces",
-        "frm_013::form_validation::username_field_leading_trailing_spaces",
-        "frm_011::form_validation::password_field_long_input",
-        "frm_010::form_validation::username_field_long_input"
+        "frm_008::form_validation::password_field_maximum_length",
+        "frm_010::form_validation::password_field_special_characters",
+        "frm_009::form_validation::username_field_special_characters",
+        "frm_014::form_validation::verify_login_button_is_disabled_when_password_field_is_empty",
+        "frm_013::form_validation::verify_login_button_is_disabled_when_username_field_is_empty",
+        "frm_006::form_validation::login_with_both_fields_empty",
+        "frm_005::form_validation::login_with_empty_password",
+        "frm_004::form_validation::login_with_empty_username",
+        "frm_009::form_validation::password_field_maximum_length",
+        "frm_008::form_validation::username_field_maximum_length",
+        "frm_016::form_validation::password_field_leading_trailing_spaces",
+        "frm_015::form_validation::username_field_leading_trailing_spaces"
       ],
-      "hits": 16,
-      "last_used_at": "2026-03-06T03:49:32"
+      "hits": 113,
+      "last_used_at": "2026-03-06T17:54:47"
+    },
+    "authentication_form::form_validation::positive": {
+      "pattern_key": "authentication_form::form_validation::positive",
+      "page_type": "authentication_form",
+      "module": "form_validation",
+      "category": "Login",
+      "test_type": "Positive",
+      "automation_counts": {
+        "auto": 3
+      },
+      "step_profiles": {
+        "open_url > fill > fill > inspect": 1,
+        "open_url > fill > fill": 2
+      },
+      "expected_profiles": {
+        "generic": 3
+      },
+      "example_titles": [
+        "Verify Login button is enabled when both fields are populated"
+      ],
+      "signatures": [
+        "frm_012::form_validation::verify_login_button_is_enabled_when_both_fields_are_populated",
+        "frm_016::form_validation::verify_login_button_is_enabled_when_both_fields_are_populated"
+      ],
+      "hits": 3,
+      "last_used_at": "2026-03-06T17:54:47"
     }
   },
-  "updated_at": "2026-03-06T03:49:32"
+  "updated_at": "2026-03-06T17:54:47"
 }

@@ -45,7 +45,7 @@ CRITICAL RULES:
 """
 
 PAGE_SCOPE_SCHEMA = """
-Return STRICT JSON object with exactly these keys:
+Return STRICT JSON object with these REQUIRED keys:
 - page_type: short string describing the page type
 - primary_goal: short string describing the main user goal on this page
 - key_modules: array of strings
@@ -54,6 +54,18 @@ Return STRICT JSON object with exactly these keys:
 - risks: array of strings
 - scope_summary: short paragraph
 - confidence: number from 0.0 to 1.0
+
+OPTIONAL keys (include when grounded in page facts; use empty arrays [] if not applicable):
+- test_dimensions: array of testing focus, e.g. ["UI", "functional", "accessibility", "security"] that apply to this page
+- edge_and_error_states: array of edge/error cases to cover, e.g. ["empty state", "error message", "invalid input", "network/loading failure", "session expired"]
+- user_states_and_roles: array of user contexts, e.g. ["guest", "logged-in", "role", "filter/sort applied", "wizard step"]
+- multi_step_flows: array of flow steps or page names for long flows (checkout, wizard, onboarding)
+- dynamic_components: array of interactive components, e.g. ["tabs", "modals", "dropdowns", "infinite scroll", "lazy load"]
+- api_contracts: array of backend/API aspects if page uses API (e.g. "list endpoint", "submit response", "timeout")
+- viewports: array of viewport focus, e.g. ["mobile", "tablet", "desktop"] for responsive coverage
+- accessibility_focus: array of a11y aspects, e.g. ["keyboard navigation", "focus", "form labels", "contrast", "ARIA"]
+- input_validation_focus: array for forms, e.g. ["required", "format", "max length", "boundaries"]
+- priority_and_risk_areas: array of critical vs nice-to-have or risk-prone areas for test prioritization
 """
 
 # ── Model Pool ─────────────────────────────────────────────────────────────
@@ -301,7 +313,8 @@ class AIEngine:
                 "- Edge cases / Boundary values\n"
                 "- Error validations (Missing fields, wrong formats, etc.)\n"
                 "- Scope-based cases that are relevant to the actual page type inferred from the actual page content and structure.\n"
-                "- Specific cases requested via 'USER INSTRUCTION' when they are still grounded in the detected page facts.\n\n"
+                "- Specific cases requested via 'USER INSTRUCTION' when they are still grounded in the detected page facts.\n"
+                "When page_scope includes test_dimensions, edge_and_error_states, viewports, accessibility_focus, input_validation_focus, or other extended scope fields, generate additional scenarios that cover those dimensions (UI, functional, a11y, viewport, error states, validation) where grounded in the context.\n\n"
                 "CRITICAL RULES:\n"
                 "- Follow TASK CONTRACT strictly. Prefer omission over invention.\n"
                 "- If the user instruction mentions unsupported surfaces, do NOT create a testcase for them.\n"
@@ -498,6 +511,7 @@ class AIEngine:
                 "Infer the page context primarily from the actual content, sections, tables, lists, forms, controls, navigation, visible cues, and any linked page samples when available.\n"
                 "Use the URL only as secondary context if the page content is ambiguous.\n"
                 "Only mention modules and flows that are grounded in the page facts.\n"
+                "Fill the OPTIONAL scope keys (test_dimensions, edge_and_error_states, user_states_and_roles, multi_step_flows, dynamic_components, api_contracts, viewports, accessibility_focus, input_validation_focus, priority_and_risk_areas) when you have grounded evidence; use empty arrays [] when not applicable. This helps generate more thorough and diverse test cases (UI, functional, edge, a11y, viewport).\n"
                 "Follow TASK CONTRACT strictly. Prefer omission over invention.\n"
                 "If the user instruction mentions unsupported surfaces, do not force them into page scope.\n"
                 f"{PAGE_SCOPE_SCHEMA}\n"
@@ -902,6 +916,16 @@ class AIEngine:
                 "priority_areas": page_scope.get("priority_areas", []),
                 "risks": page_scope.get("risks", []),
                 "confidence": page_scope.get("confidence", 0),
+                "test_dimensions": list(page_scope.get("test_dimensions", []) or [])[:8],
+                "edge_and_error_states": list(page_scope.get("edge_and_error_states", []) or [])[:8],
+                "user_states_and_roles": list(page_scope.get("user_states_and_roles", []) or [])[:8],
+                "multi_step_flows": list(page_scope.get("multi_step_flows", []) or [])[:10],
+                "dynamic_components": list(page_scope.get("dynamic_components", []) or [])[:8],
+                "api_contracts": list(page_scope.get("api_contracts", []) or [])[:6],
+                "viewports": list(page_scope.get("viewports", []) or [])[:4],
+                "accessibility_focus": list(page_scope.get("accessibility_focus", []) or [])[:8],
+                "input_validation_focus": list(page_scope.get("input_validation_focus", []) or [])[:8],
+                "priority_and_risk_areas": list(page_scope.get("priority_and_risk_areas", []) or [])[:8],
             },
             "knowledge_bank": self._summarize_relevant_knowledge(page_model),
             "case_memory": case_memory,
@@ -1086,6 +1110,21 @@ class AIEngine:
             risks.append("Async content or live updates may create unstable UI states.")
         if page_facts.get("graphql") or page_facts.get("api_surface"):
             risks.append("Backend responses should remain consistent with UI state.")
+        test_dimensions = ["UI", "functional"]
+        if page_facts.get("form"):
+            test_dimensions.append("input_validation")
+        edge_states = []
+        if page_facts.get("form"):
+            edge_states.extend(["invalid input", "missing required"])
+        if page_facts.get("auth"):
+            edge_states.append("session expired")
+        dynamic = []
+        if page_facts.get("pagination"):
+            dynamic.append("pagination")
+        if page_facts.get("filter"):
+            dynamic.append("filter/sort")
+        viewports = ["desktop"]
+        input_focus = list(page_facts.get("field_semantics", []) or [])[:4] if page_facts.get("form") else []
         return {
             "page_type": heuristic_scope.get("likely_page_type", "") or "generic_page",
             "primary_goal": self._heuristic_primary_goal(page_model, page_info),
@@ -1095,6 +1134,16 @@ class AIEngine:
             "risks": risks[:4],
             "scope_summary": f"Scope inferred from grounded facts across {fact_pack.get('summary', {}).get('fact_count', 0)} extracted page facts.",
             "confidence": min(0.9, 0.55 + (fact_pack.get("summary", {}).get("fact_count", 0) * 0.01)),
+            "test_dimensions": test_dimensions,
+            "edge_and_error_states": edge_states,
+            "user_states_and_roles": [],
+            "multi_step_flows": flows[:4],
+            "dynamic_components": dynamic,
+            "api_contracts": ["API used"] if (page_facts.get("api_surface") or page_facts.get("graphql")) else [],
+            "viewports": viewports,
+            "accessibility_focus": [],
+            "input_validation_focus": input_focus,
+            "priority_and_risk_areas": list(modules[:3]) if modules else [],
         }
 
     def _heuristic_scenarios_from_facts(
