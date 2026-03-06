@@ -2,7 +2,14 @@
 
 {% block title %}Run Detail | TracePilot{% endblock %}
 
-{% block header_kicker %}Execution Run{% endblock %}
+{% block header_kicker %}
+<a href="{{ url_for('test_case_generator.scenario_results_page') }}"
+  style="color: var(--accent); text-decoration: none; font-size: 0.85rem; display: inline-flex; align-items: center; margin-bottom: 0.5rem; font-weight: 500;">
+  <span style="margin-right: 0.25rem;">←</span> Back to Generate Results
+</a>
+<br />
+EXECUTION RUN
+{% endblock %}
 {% block header_title %}{{ (run.get('run_name') or '')[:20] }}{% if (run.get('run_name') or '')|length > 20 %}...{%
 endif %}{% endblock %}
 {% block header_subtitle %}{{ (run.get('page_type') or '')|upper }} run on {{ run.get('created_at', '') }}{% endblock %}
@@ -29,6 +36,35 @@ endif %}{% endblock %}
   </div>
 </div>
 
+{% if run.get('confidence_breakdown') %}
+<section class="dashboard-section card confidence-breakdown-card">
+  <div class="section-header">
+    <h3><span class="icon">📊</span> Confidence breakdown</h3>
+  </div>
+  <div class="confidence-breakdown-grid">
+    {% for key, val in (run.confidence_breakdown or {})|dictsort %}
+    {% if val is number %}
+    <div class="confidence-breakdown-item">
+      <span class="confidence-breakdown-label">{{ key|replace('_', ' ')|title }}</span>
+      <span class="confidence-breakdown-value">{% if val >= 0 and val <= 1 %}{{ (val * 100)|round(0)|int }}%{% else %}{{ val }}{% endif %}</span>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+  <p class="text-dim" style="margin: 0.5rem 0 0; font-size: 0.8rem;">Nilai rendah di sini bisa dinaikkan dengan Run E2E, crawl lebih banyak, dan instruksi jelas. <a href="{{ url_for('improve_ai_page') }}">Improve AI</a></p>
+</section>
+{% endif %}
+
+{% if not run.get('execution_ran') %}
+<section class="dashboard-section card cta-e2e-card">
+  <div class="section-header">
+    <h3><span class="icon">▶️</span> Naikkan confidence</h3>
+  </div>
+  <p class="text-dim">Belum ada eksekusi E2E untuk run ini. Jalankan E2E automation agar sinyal eksekusi ikut memperkuat confidence.</p>
+  <a href="{{ url_for('end_to_end_automation.automation_testing_page', source_run_name=run.get('run_name', '')) }}" class="primary-button">Run E2E</a>
+</section>
+{% endif %}
+
 <div class="dashboard-grid">
   <section class="dashboard-section card execution-cases-section" style="grid-column: span 2;">
     <div class="section-header section-header-with-actions">
@@ -39,7 +75,6 @@ endif %}{% endblock %}
           style="display: none;">Save</button>
       </div>
     </div>
-    <p id="run-detail-save-status" class="run-detail-save-status" role="status" aria-live="polite"></p>
     <div class="table-shell table-shell-resizable" id="run-detail-table-shell">
       <table class="table-minimal table-run-detail table-editable" id="run-detail-cases-table">
         <thead>
@@ -75,8 +110,7 @@ endif %}{% endblock %}
               '')) }}</td>
             <td class="cell-editable cell-steps" contenteditable="true" data-field="Precondition">{{
               fm.get('Precondition', case.get('precondition', '')) }}</td>
-            <td class="cell-editable cell-steps" contenteditable="true" data-field="Steps to Reproduce">{{ fm.get('Steps
-              to Reproduce', '') }}</td>
+            <td class="cell-editable cell-steps" contenteditable="true" data-field="Steps to Reproduce">{{ fm.get('Steps to Reproduce', '') }}</td>
             <td class="cell-editable" contenteditable="true" data-field="Expected Result">{{ fm.get('Expected Result',
               case.get('expected_result', '')) }}</td>
             <td class="cell-editable" contenteditable="true" data-field="Actual Result">{{ fm.get('Actual Result',
@@ -138,6 +172,10 @@ endif %}{% endblock %}
     </div>
   </section>
   {% endif %}
+  <p id="run-detail-save-status" class="run-detail-save-status" role="status" aria-live="polite"></p>
+  <p class="run-detail-feedback-cta">
+    <a href="{{ url_for('improve_ai_page') }}">Beri feedback → Improve AI</a>
+  </p>
 </div>
 
 <script>

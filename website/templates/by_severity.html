@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}By Severity | TracePilot{% endblock %}
+{% block header_kicker %}Bug Report{% endblock %}
+{% block header_title %}Failed Cases by Severity{% endblock %}
+{% block header_subtitle %}Failed test cases grouped by Critical, Major, Minor, Trivial. Max 10 per page.{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="eyebrow">Bug Report</p>
+            <h2>By Severity</h2>
+        </div>
+        <div class="metric-inline">
+            <span>{{ total_failed_cases or 0 }} failed cases</span>
+        </div>
+    </div>
+
+    {% for severity in ['Critical', 'Major', 'Minor', 'Trivial', ''] %}
+    {% set cases = by_severity.get(severity, []) %}
+    {% if cases %}
+    <div class="severity-block">
+        <h3 class="severity-heading {% if severity == 'Critical' %}severity-critical{% elif severity == 'Major' %}severity-major{% endif %}">
+            {{ severity or 'Unset' }} ({{ cases|length }})
+        </h3>
+        <div class="table-shell">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Run</th>
+                        <th>Case ID</th>
+                        <th>Title</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in cases %}
+                    <tr>
+                        <td><a class="inline-link" href="{{ url_for('run_detail', run_name=c.get('run_name', '')) }}">{{ c.get('run_name', '')[:28] }}{% if (c.get('run_name', '')|length) > 28 %}...{% endif %}</a></td>
+                        <td class="mono">{{ c.get('case_id', '') }}</td>
+                        <td>{{ (c.get('title', '') or '-')[:45] }}{% if (c.get('title', '')|length) > 45 %}...{% endif %}</td>
+                        <td><a href="{{ url_for('run_detail', run_name=c.get('run_name', '')) }}" class="inline-mini-button">View run</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    {% set has_any = by_severity.get('Critical', []) or by_severity.get('Major', []) or by_severity.get('Minor', []) or by_severity.get('Trivial', []) or by_severity.get('', []) %}
+    {% if not has_any %}
+    <p class="empty-state">No failed cases to show by severity.</p>
+    {% endif %}
+    {% if num_pages and num_pages > 1 %}
+    <div class="pagination-container">
+        <a href="{{ url_for('by_severity_page', page=page-1) }}"
+            class="page-nav {% if page <= 1 %}disabled{% endif %}"
+            {% if page <= 1 %}onclick="return false;"{% endif %}>&lt;</a>
+        <div class="page-numbers">
+            {% for p in range(1, num_pages + 1) %}
+            <a href="{{ url_for('by_severity_page', page=p) }}"
+                class="page-num {% if p == page %}active{% endif %}">{{ p }}</a>
+            {% endfor %}
+        </div>
+        <a href="{{ url_for('by_severity_page', page=page+1) }}"
+            class="page-nav {% if page >= num_pages %}disabled{% endif %}"
+            {% if page >= num_pages %}onclick="return false;"{% endif %}>&gt;</a>
+    </div>
+    {% endif %}
+</section>
+<style>
+.severity-block { margin-bottom: 1.5rem; }
+.severity-heading { font-size: 1rem; margin: 0 0 0.5rem 0; }
+.severity-critical { color: var(--danger); }
+.severity-major { color: var(--warning); }
+</style>
+{% endblock %}

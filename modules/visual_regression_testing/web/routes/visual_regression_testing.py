@@ -35,11 +35,20 @@ def vrt_scan_page():
 @bp.get("/visual-regression-testing/changes")
 def vrt_changes_page():
     from core.dashboard_data import dashboard_metrics
+    search_query = request.args.get("q", "").strip()
+    try:
+        page = max(1, int(request.args.get("page", "1")))
+    except ValueError:
+        page = 1
+    per_page = 15
     context = build_vrt_changes_context(
         result_dir=RESULT_DIR,
         list_runs=list_runs,
         sort_runs=sort_runs,
         dashboard_metrics=dashboard_metrics,
+        search_query=search_query,
+        page=page,
+        per_page=per_page,
     )
     return render_template("visual_regression_results.html", **context)
 

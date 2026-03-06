@@ -51,6 +51,12 @@ def automation_testing_page():
 def automation_results_page():
     from website.dashboard import dashboard_metrics
     sort_mode = request.args.get("sort", "latest").strip() or "latest"
+    search_query = request.args.get("q", "").strip()
+    try:
+        page = max(1, int(request.args.get("page", "1")))
+    except ValueError:
+        page = 1
+    per_page = 15
     context = build_automation_results_context(
         result_dir=RESULT_DIR,
         sort_mode=sort_mode,
@@ -58,6 +64,9 @@ def automation_results_page():
         sort_runs=sort_runs,
         is_automation_run=is_automation_run,
         dashboard_metrics=dashboard_metrics,
+        search_query=search_query,
+        page=page,
+        per_page=per_page,
     )
     return render_template("end_to_end_automation_results.html", **context)
 

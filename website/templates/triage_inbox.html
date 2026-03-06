@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Triage Inbox | TracePilot{% endblock %}
+{% block header_kicker %}Triage Inbox{% endblock %}
+{% block header_title %}Review Requested{% endblock %}
+{% block header_subtitle %}A queue of tests requiring human intervention due to high risk, potential regressions, or low
+AI confidence.{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="eyebrow">Human-in-the-loop review</p>
+            <h2>Review Queue</h2>
+        </div>
+        <div class="metric-inline">
+            <span>{{ triage.get('unreviewed_count', 0) }} unreviewed runs</span>
+            <span>Manual verification needed: {{ triage.get('manual_verify_count', 0) }}</span>
+        </div>
+    </div>
+
+    <div class="table-shell">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Review Item</th>
+                    <th>Reason</th>
+                    <th>Safety Index</th>
+                    <th>Confidence</th>
+                    <th>Timestamp</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in triage.get('items', []) %}
+                <tr>
+                    <td>
+                        <div class="run-identity">
+                            <a class="inline-link"
+                                href="{{ url_for('run_detail', run_name=item.get('run_name', '')) }}">
+                                <strong>{{ item.get('run_name', '')[:28] }}</strong>
+                            </a>
+                            <p class="run-url-sub" title="{{ item.get('url', '') }}">{{ item.get('url', '')[:50] }}</p>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="reason-tag {% if item.get('priority') == 'high' %}critical{% endif %}">
+                            {{ item.get('reason_short', 'Review Needed') }}
+                        </span>
+                    </td>
+                    <td>
+                        <span
+                            class="badge {% if item.get('safety_index', 0) < 70 %}badge-danger{% else %}badge-passed{% endif %}">
+                            {{ item.get('safety_index', 0) }}/100
+                        </span>
+                    </td>
+                    <td>
+                        <div class="confidence-bar-mini">
+                            <div class="confidence-fill" style="width: {{ item.get('confidence_percent', 0) }}%"></div>
+                            <span>{{ item.get('confidence_percent', 0) }}%</span>
+                        </div>
+                    </td>
+                    <td><span class="text-dim">{{ item.get('timestamp', '')[:16]|replace('T', ' ') }}</span></td>
+                    <td>
+                        <div class="action-cell">
+                            <a class="inline-mini-button"
+                                href="{{ url_for('run_detail', run_name=item.get('run_name', '')) }}">Approve</a>
+                            <a class="inline-mini-button ghost"
+                                href="{{ url_for('run_detail', run_name=item.get('run_name', '')) }}">Recalibrate</a>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="empty-state">
+                        Your triage inbox is empty. Excellent job! 🛡️✨
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<style>
+    .reason-tag {
+        font-size: 0.75rem;
+        font-weight: 700;
+        background: var(--bg-hover);
+        color: var(--text-dim);
+        padding: 4px 8px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .reason-tag.critical {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+        border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+</style>
+{% endblock %}

@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}AI Safety Audit | TracePilot{% endblock %}
+{% block header_kicker %}Security & Grounding{% endblock %}
+{% block header_title %}AI Safety Audit{% endblock %}
+{% block header_subtitle %}Analyzing autonomous agents: verifying decisions against policy packs, grounding checks, and
+guardrail violations.{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="eyebrow">Governance & Security</p>
+            <h2>Safety Audit Log</h2>
+        </div>
+        <div class="metric-inline">
+            <span>Overall Score: {{ metrics.get('avg_safety_index', 0) }}%</span>
+            <span class="bad-stat">Guardrail Overrides: {{ audit.get('override_count', 0) }}</span>
+        </div>
+    </div>
+
+    <div class="grid-columns-3">
+        <div class="safety-card">
+            <h4>🛂 Policy Guardrails</h4>
+            <div class="safety-stat">{{ audit.get('policy_pass_rate', 0) }}%</div>
+            <p>Runs compliant with instruction contracts.</p>
+        </div>
+        <div class="safety-card">
+            <h4>👁️ Grounding Confidence</h4>
+            <div class="safety-stat">{{ metrics.get('avg_confidence_percent', 0) }}%</div>
+            <p>Verification of AI responses against real site data.</p>
+        </div>
+        <div class="safety-card">
+            <h4>🚨 High-Risk Drift</h4>
+            <div class="safety-stat danger">
+                {{ audit.get('high_drift_count', 0) }}
+            </div>
+            <p>Detected semantic drift in recent automated runs.</p>
+        </div>
+    </div>
+
+    <div class="table-shell" style="margin-top: 32px;">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Audit ID</th>
+                    <th>Safety Index</th>
+                    <th>Policy Pack</th>
+                    <th>Grounding status</th>
+                    <th>Critical Alert</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in audit.get('logs', []) %}
+                <tr>
+                    <td>
+                        <div class="run-identity">
+                            <a class="inline-link" href="{{ url_for('run_detail', run_name=log.get('run_name', '')) }}">
+                                <strong>{{ log.get('run_name', '')[:28] }}</strong>
+                            </a>
+                            <p class="run-url-sub">{{ log.get('timestamp', '')[:16]|replace('T', ' ') }}</p>
+                        </div>
+                    </td>
+                    <td>
+                        <span
+                            class="badge {% if log.get('safety_index', 0) < 70 %}badge-danger{% elif log.get('safety_index', 0) < 90 %}badge-skipped{% else %}badge-passed{% endif %}">
+                            {{ log.get('safety_index', 0) }}/100
+                        </span>
+                    </td>
+                    <td>
+                        <span class="label-verdict {% if log.get('policy_match') %}pass{% else %}fail{% endif %}">
+                            {% if log.get('policy_match') %}Compliant{% else %}Violated{% endif %}
+                        </span>
+                    </td>
+                    <td>
+                        <div class="confidence-bar-mini">
+                            <div class="confidence-fill"
+                                style="--width: {{ log.get('confidence_percent', 0)|float }}%; width: var(--width);">
+                            </div>
+                            <span>{{ log.get('confidence_percent', 0) }}%</span>
+                        </div>
+                    </td>
+                    <td>
+                        {% if log.get('critical_reason') %}
+                        <span class="critical-text-box" title="{{ log.get('critical_reason') }}">
+                            {{ log.get('critical_reason')[:40] }}{% if log.get('critical_reason')|length > 40 %}...{%
+                            endif %}
+                        </span>
+                        {% else %}
+                        <span class="text-dim">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{{ url_for('run_detail', run_name=log.get('run_name', '')) }}"
+                            class="inline-mini-button ghost">Audit Log</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="empty-state">
+                        Wait for system activity to populate safety logs. 🛡️
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<style>
+    .grid-columns-3 {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+        margin-top: 24px;
+    }
+
+    .safety-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        padding: 24px;
+        text-align: center;
+    }
+
+    .safety-card h4 {
+        margin: 0 0 16px 0;
+        font-size: 0.95rem;
+        text-transform: uppercase;
+        color: var(--text-dim);
+    }
+
+    .safety-stat {
+        font-size: 2.2rem;
+        font-weight: 800;
+        color: var(--highlight);
+        margin-bottom: 8px;
+    }
+
+    .safety-stat.danger {
+        color: #ef4444;
+    }
+
+    .safety-card p {
+        font-size: 0.85rem;
+        color: var(--text-dim);
+        margin: 0;
+    }
+
+    .label-verdict {
+        font-size: 0.75rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        padding: 4px 10px;
+        border-radius: 40px;
+    }
+
+    .label-verdict.pass {
+        background: rgba(16, 185, 129, 0.15);
+        color: #10b981;
+    }
+
+    .label-verdict.fail {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+    }
+
+    .critical-text-box {
+        background: rgba(239, 68, 68, 0.05);
+        color: #ef4444;
+        font-size: 0.75rem;
+        padding: 4px 8px;
+        border-left: 2px solid #ef4444;
+        font-weight: 600;
+    }
+</style>
+{% endblock %}

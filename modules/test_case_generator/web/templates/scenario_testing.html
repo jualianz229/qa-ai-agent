@@ -11,13 +11,18 @@
       <p class="eyebrow">Test Case Builder</p>
       <h2>Generate Test Cases</h2>
     </div>
-    <span class="panel-badge">Step 1</span>
+    <div class="panel-head-actions">
+      <a href="{{ url_for('test_case_generator.scenario_results_page') }}" class="ghost-button">Generator Results</a>
+      <span class="panel-badge">Step 1</span>
+    </div>
   </div>
+  <div id="scenario-error-alert" class="inline-error-alert hidden-panel" role="alert" aria-live="assertive"></div>
   <form id="scenario-form" class="form-stack">
     <div class="input-group input-group-full">
       <label for="scenario-url">Target URL</label>
       <input id="scenario-url" type="text" name="url" placeholder="https://example.com" required>
       <p class="field-inline-note" id="scenario-url-hint">* Use a full URL (example: https://example.com).</p>
+      <p class="field-inline-note scenario-run-preview" id="scenario-run-preview" aria-live="polite"></p>
     </div>
     <div class="form-grid">
       <div class="input-group balanced-card">
@@ -27,6 +32,7 @@
           <option value="3" selected>3 pages</option>
           <option value="5">5 pages</option>
         </select>
+        <p class="field-inline-note">Start URL + up to N discovered links. Lebih banyak halaman → coverage & confidence naik.</p>
         <div class="nested-setting">
           <label for="scenario-recrawl">Adaptive recrawl</label>
           <select id="scenario-recrawl" name="adaptive_recrawl">
@@ -45,6 +51,7 @@
         <div class="form-actions form-actions-inline">
           <div class="form-actions-buttons">
             <button class="primary-button" type="submit">Generate Test Cases</button>
+            <button type="button" id="scenario-clear-draft" class="ghost-button">Clear draft</button>
           </div>
         </div>
         <p class="helper-text" id="scenario-status" role="status" aria-live="polite"></p>
@@ -66,9 +73,11 @@
         </div>
         <div id="scenario-custom-template-group" class="template-inline-editor">
           <label for="scenario-custom-template">Custom Template</label>
-          <textarea class="template-editor" id="scenario-custom-template" name="custom_template" rows="8"
+          <textarea class="template-editor" id="scenario-custom-template" name="custom_template" rows="8" maxlength="2000"
             placeholder="Leave blank if not needed. Fill this to add custom instruction for this scenario run."></textarea>
-          <p class="helper-text template-note">* Any edits here will be saved automatically when you generate scenario.
+          <p class="helper-text template-note">
+            Instruksi jelas (modul, prioritas, aturan testing) bantu scope & scenario alignment → confidence naik.
+            <span id="scenario-custom-char-count" class="char-count">0 / 2000</span> — Edits saved when you generate.
           </p>
         </div>
       </div>
@@ -108,6 +117,50 @@
     let inlineQueueTimer = 0;
     const draftStorageKey = "tracepilot.scenario.templateDraft.v2";
     const jobIdStorageKey = "tracepilot.scenario.currentJobId";
+    const CUSTOM_INSTRUCTION_MAX = 2000;
+    const errorAlert = document.getElementById("scenario-error-alert");
+    const runPreview = document.getElementById("scenario-run-preview");
+    const customCharCount = document.getElementById("scenario-custom-char-count");
+    const clearDraftBtn = document.getElementById("scenario-clear-draft");
+
+    function showError(message) {
+      if (!errorAlert) return;
+      errorAlert.textContent = message || "";
+      errorAlert.classList.toggle("hidden-panel", !message);
+    }
+
+    function runNamePreview(url) {
+      const raw = String(url || "").trim();
+      if (!raw) return "";
+      try {
+        const normalized = /^https?:\/\//i.test(raw) ? raw : "https://" + raw;
+        const u = new URL(normalized);
+        let host = (u.hostname || "").replace(/^www\./, "").toLowerCase();
+        host = host.replace(/\.(com|net|org|io)$/, "").replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "") || "run";
+        const now = new Date();
+        const d = String(now.getDate()).padStart(2, "0");
+        const m = String(now.getMonth() + 1).padStart(2, "0");
+        const y = String(now.getFullYear()).slice(-2);
+        const h = String(now.getHours()).padStart(2, "0");
+        const min = String(now.getMinutes()).padStart(2, "0");
+        return host + "_" + d + m + y + "_" + h + min;
+      } catch (_e) {
+        return "";
+      }
+    }
+
+    function updateRunPreview() {
+      if (!runPreview) return;
+      const preview = runNamePreview(scenarioUrl?.value || "");
+      runPreview.textContent = preview ? "Run will be saved as: " + preview + " (approx.)" : "";
+    }
+
+    function updateCustomCharCount() {
+      if (!customCharCount) return;
+      const len = (customTemplate?.value || "").length;
+      customCharCount.textContent = len + " / " + CUSTOM_INSTRUCTION_MAX;
+      customCharCount.classList.toggle("is-near-limit", len > CUSTOM_INSTRUCTION_MAX * 0.9);
+    }
 
     function formatDurationSeconds(createdAtIso, updatedAtIso) {
       const createdAt = Date.parse(String(createdAtIso || ""));
@@ -144,6 +197,7 @@
         const hasRunningState = submitButton.classList.contains("is-loading");
         submitButton.disabled = !result.valid || isSubmitting || hasRunningState;
       }
+      updateRunPreview();
       return result.valid;
     }
 
@@ -364,14 +418,37 @@
       loadTemplateContent(templateSelect.value || "");
       saveTemplateDraft();
     });
-    scenarioUrl?.addEventListener("input", () => { updateUrlValidationUi(); saveTemplateDraft(); });
+    scenarioUrl?.addEventListener("input", () => { updateUrlValidationUi(); saveTemplateDraft(); showError(""); });
     templateEditor?.addEventListener("input", saveTemplateDraft);
-    customTemplate?.addEventListener("input", saveTemplateDraft);
+    customTemplate?.addEventListener("input", () => { saveTemplateDraft(); updateCustomCharCount(); showError(""); });
     document.getElementById("scenario-crawl-limit")?.addEventListener("change", saveTemplateDraft);
     document.getElementById("scenario-recrawl")?.addEventListener("change", saveTemplateDraft);
 
+    if (clearDraftBtn) {
+      clearDraftBtn.addEventListener("click", () => {
+        try { sessionStorage.removeItem(draftStorageKey); sessionStorage.removeItem(jobIdStorageKey); } catch (_e) { }
+        if (scenarioUrl) scenarioUrl.value = "";
+        if (templateSelect) templateSelect.value = "";
+        if (templateEditor) templateEditor.value = "";
+        if (customTemplate) customTemplate.value = "";
+        const crawlEl = document.getElementById("scenario-crawl-limit");
+        if (crawlEl) crawlEl.value = "3";
+        const recrawlEl = document.getElementById("scenario-recrawl");
+        if (recrawlEl) recrawlEl.value = "yes";
+        const csvSepEl = document.getElementById("scenario-csv-sep");
+        if (csvSepEl) csvSepEl.value = ",";
+        loadTemplateContent("");
+        updateUrlValidationUi();
+        updateCustomCharCount();
+        showError("");
+        status.textContent = "Draft cleared.";
+      });
+    }
+
     try { currentScenarioJobId = String(sessionStorage.getItem(jobIdStorageKey) || ""); } catch (_e) { }
     loadTemplateDraft();
+    updateCustomCharCount();
+    updateRunPreview();
     (async () => {
       const draft = loadTemplateDraft();
       if (templateSelect && draft?.template_name) {
@@ -403,11 +480,15 @@
       }
       status.textContent = "Submitting test case job...";
       const data = new FormData(form);
+      showError("");
       try {
         const response = await fetch("/api/scenario-jobs", { method: "POST", body: data });
         const payload = await response.json();
         if (!response.ok || !payload.ok) {
-          throw new Error(payload.error || "Failed to generate test case.");
+          const msg = payload.error || "Failed to generate test case.";
+          showError(msg);
+          status.textContent = msg;
+          throw new Error(msg);
         }
         currentScenarioJobId = String(payload?.job?.id || "");
         try { window.sessionStorage.setItem(jobIdStorageKey, currentScenarioJobId); } catch (_e) { }
@@ -419,7 +500,9 @@
         refreshInlineQueue();
         startInlineQueuePolling();
       } catch (error) {
-        status.textContent = error.message || "Failed to generate test case.";
+        const msg = error.message || "Failed to generate test case.";
+        if (status) status.textContent = msg;
+        if (errorAlert?.classList.contains("hidden-panel")) showError(msg);
       } finally {
         isSubmitting = false;
         updateUrlValidationUi();

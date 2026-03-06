@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Bug Report | TracePilot{% endblock %}
+{% block header_kicker %}Bug Report{% endblock %}
+{% block header_title %}Runs with Failures{% endblock %}
+{% block header_subtitle %}Centralized tracker for all failed automation runs and critical scenario defects.{% endblock
+%}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="eyebrow">Defect tracker</p>
+            <h2>Failed Runs</h2>
+        </div>
+        <div class="metric-inline">
+            <span>{{ total_failed_runs or failed_runs|length }} active failures</span>
+            <span>Unresolved cases: {{ metrics.get('failed_cases', 0) }}</span>
+        </div>
+    </div>
+
+    <div class="toolbar-container">
+        <form class="search-form" action="{{ url_for('bug_report_page') }}" method="get">
+            <div class="search-wrapper">
+                <span class="search-icon">🔍</span>
+                <input type="text" name="q" placeholder="Search by run name or URL..."
+                    value="{{ search_query or request.args.get('q', '') }}" autocomplete="off">
+            </div>
+        </form>
+    </div>
+
+    <div class="table-shell">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Failed Run</th>
+                    <th>Cases Status</th>
+                    <th>Failure Rate</th>
+                    <th>Videos</th>
+                    <th>Safety</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in failed_runs %}
+                <tr>
+                    <td>
+                        <div class="run-identity">
+                            <a class="inline-link" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">
+                                <strong>{{ run.get('run_name', '')[:28] }}{% if (run.get('run_name', '')|length) > 28
+                                    %}...{% endif %}</strong>
+                            </a>
+                            <p class="run-url-sub" title="{{ run.get('url', '') }}">{{ run.get('url', '')[:50] }}{% if
+                                (run.get('url', '')|length) > 50 %}...{% endif %}</p>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="case-status-inline">
+                            <span class="label-success">{{ (run.get('status_counts') or {}).get('passed', 0) }} P</span>
+                            <span class="label-danger">{{ (run.get('status_counts') or {}).get('failed', 0) }} F</span>
+                        </div>
+                    </td>
+                    <td>
+                        {% set total = (run.get('status_counts') or {}).get('passed', 0) + (run.get('status_counts') or
+                        {}).get('failed', 0) %}
+                        {% set failed = (run.get('status_counts') or {}).get('failed', 0) %}
+                        {% if total > 0 %}
+                        {% set pct = (failed / total * 100)|round(1) %}
+                        <div class="pct-bar-container" title="{{ pct }}% failure rate">
+                            <div class="pct-bar-fill danger"
+                                style="--width: {{ pct|float|default(0) }}%; width: var(--width);">
+                            </div>
+                            <span class="pct-text">{{ pct }}%</span>
+                        </div>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                    <td class="text-center">{{ run.get('video_count', 0) }}</td>
+                    <td>
+                        <span
+                            class="badge {% if run.get('safety_index', 0) < 70 %}badge-failed{% else %}badge-skipped{% endif %}">
+                            {{ run.get('safety_index', 0) }}/100
+                        </span>
+                    </td>
+                    <td>
+                        <div class="action-cell">
+                            <a class="inline-mini-button"
+                                href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">Investigate</a>
+                            <a class="inline-mini-button ghost" href="#">Push Jira</a>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="empty-state">
+                        No failed runs found. Everything looks clean! ✨
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if num_pages and num_pages > 1 %}
+    <div class="pagination-container">
+        <a href="{{ url_for('bug_report_page', q=search_query, page=page-1) }}"
+            class="page-nav {% if page <= 1 %}disabled{% endif %}" {% if page <=1 %}onclick="return false;" {% endif
+            %}>&lt;</a>
+        <div class="page-numbers">
+            {% for p in range(1, num_pages + 1) %}
+            <a href="{{ url_for('bug_report_page', q=search_query, page=p) }}"
+                class="page-num {% if p == page %}active{% endif %}">{{ p }}</a>
+            {% endfor %}
+        </div>
+        <a href="{{ url_for('bug_report_page', q=search_query, page=page+1) }}"
+            class="page-nav {% if page >= num_pages %}disabled{% endif %}" {% if page>= num_pages %}onclick="return
+            false;"{% endif %}>&gt;</a>
+    </div>
+    {% endif %}
+</section>
+
+<style>
+    .case-status-inline {
+        display: flex;
+        gap: 8px;
+        font-size: 0.8rem;
+        font-weight: 700;
+    }
+
+    .label-success {
+        color: #10b981;
+    }
+
+    .label-danger {
+        color: #ef4444;
+    }
+
+    .pct-bar-container {
+        width: 100px;
+        height: 8px;
+        background: var(--bg-deep);
+        border-radius: 4px;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .pct-bar-fill.danger {
+        background: #ef4444;
+        height: 100%;
+    }
+
+    .pct-text {
+        position: absolute;
+        top: -2px;
+        right: -40px;
+        font-size: 0.7rem;
+        color: var(--text-dim);
+    }
+</style>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const searchInput = document.querySelector('input[name="q"]');
+        const searchForm = searchInput.form;
+        let timeout = null;
+        searchInput.addEventListener('input', () => {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => {
+                sessionStorage.setItem('search_cursor_pos', searchInput.selectionStart);
+                searchForm.submit();
+            }, 500);
+        });
+        if (searchInput.value) {
+            searchInput.focus();
+            const pos = sessionStorage.getItem('search_cursor_pos');
+            if (pos !== null) {
+                searchInput.setSelectionRange(pos, pos);
+                sessionStorage.removeItem('search_cursor_pos');
+            }
+        }
+    });
+</script>
+{% endblock %}

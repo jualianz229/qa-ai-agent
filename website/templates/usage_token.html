@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Usage token | TracePilot{% endblock %}
+
+{% block header_kicker %}AI Improvement{% endblock %}
+{% block header_title %}Usage token{% endblock %}
+{% block header_subtitle %}Token usage for all runs. Semua aktivitas AI akan tercatat di sini.{% endblock %}
+
+{% block content %}
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Total runs</div>
+        <div class="stat-value">{{ total_runs }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Total tokens</div>
+        <div class="stat-value">{{ total_tokens|default(0) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Input (est.)</div>
+        <div class="stat-value">{{ total_input|int|default(0) }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Output (est.)</div>
+        <div class="stat-value">{{ total_output|int|default(0) }}</div>
+    </div>
+</div>
+
+{% if total_tokens %}
+<section class="dashboard-section card usage-breakdown-card">
+    <div class="section-header">
+        <h3><span class="icon">📊</span> Token usage by feature</h3>
+    </div>
+    {% set shares = feature_shares or {} %}
+    <div class="usage-breakdown-row">
+        <div class="usage-breakdown-item">
+            <span class="stat-label">Case Generator</span>
+            <div class="usage-breakdown-bar">
+                <div class="usage-breakdown-fill"
+                    style="--width: {{ shares.get('scenario', 0) }}%; width: var(--width);"></div>
+            </div>
+            <span class="usage-breakdown-val">{{ shares.get('scenario', 0) }}%</span>
+        </div>
+        <div class="usage-breakdown-item">
+            <span class="stat-label">E2E Automation</span>
+            <div class="usage-breakdown-bar">
+                <div class="usage-breakdown-fill usage-breakdown-fill-automation"
+                    style="--width: {{ shares.get('automation', 0) }}%; width: var(--width);"></div>
+            </div>
+            <span class="usage-breakdown-val">{{ shares.get('automation', 0) }}%</span>
+        </div>
+        <div class="usage-breakdown-item">
+            <span class="stat-label">Visual Regression</span>
+            <div class="usage-breakdown-bar">
+                <div class="usage-breakdown-fill usage-breakdown-fill-vrt"
+                    style="--width: {{ shares.get('vrt', 0) }}%; width: var(--width);">
+                </div>
+            </div>
+            <span class="usage-breakdown-val">{{ shares.get('vrt', 0) }}%</span>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<section class="dashboard-section card" style="margin-top: var(--space);">
+    <div class="section-header">
+        <h3><span class="icon">🪙</span> Token usage per run</h3>
+        <div class="section-header-actions">
+            <span class="panel-badge">{{ total_runs }} run(s) — halaman {{ page }}/{{ num_pages }}</span>
+            <a href="{{ url_for('improve_ai_page') }}" class="ghost-button">Improve AI</a>
+        </div>
+    </div>
+    <p class="helper-text">Semua run yang punya data token (Case Generator, E2E, VRT, dll.) masuk ke list ini. Maks. 10
+        per halaman.</p>
+    <div class="table-shell">
+        <table class="table-minimal">
+            <thead>
+                <tr>
+                    <th>Run name</th>
+                    <th>Feature</th>
+                    <th>Total tokens</th>
+                    <th>Input</th>
+                    <th>Output</th>
+                    <th>Calls</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in (rows or []) %}
+                <tr class="{% if row.get('is_expensive') %}usage-row-expensive{% endif %}">
+                    <td><a href="{{ url_for('run_detail', run_name=row.get('run_name', '')) }}">{{ row.get('run_name',
+                            '') }}</a></td>
+                    <td>{{ row.get('feature_label', '') }}</td>
+                    <td>
+                        {{ row.get('total_tokens', 0) }}
+                        {% if row.get('is_expensive') %}
+                        <span class="badge badge-danger usage-badge-expensive">High</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ row.get('input_tokens', 0) }}</td>
+                    <td>{{ row.get('output_tokens', 0) }}</td>
+                    <td class="text-right">{{ ((row.get('confidence', 0)|float) * 100)|round(0)|int }}%</td>
+                    <td>{{ row.get('calls', 0) }}</td>
+                    <td><a href="{{ url_for('run_detail', run_name=row.get('run_name', '')) }}"
+                            class="inline-link">Detail</a></td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="8" class="empty-state">Belum ada data token. Jalankan Case Generator atau fitur lain
+                        untuk mengisi.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if num_pages > 1 %}
+    <div class="pagination-container">
+        <a href="{{ url_for('usage_token_page', page=page-1) }}" class="page-nav {% if page <= 1 %}disabled{% endif %}"
+            {% if page <=1 %}onclick="return false;" {% endif %}>&lt;</a>
+        <div class="page-numbers">
+            {% for p in range(1, num_pages + 1) %}
+            <a href="{{ url_for('usage_token_page', page=p) }}" class="page-num {% if p == page %}active{% endif %}">{{
+                p }}</a>
+            {% endfor %}
+        </div>
+        <a href="{{ url_for('usage_token_page', page=page+1) }}"
+            class="page-nav {% if page >= num_pages %}disabled{% endif %}" {% if page>= num_pages %}onclick="return
+            false;"{% endif %}>&gt;</a>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

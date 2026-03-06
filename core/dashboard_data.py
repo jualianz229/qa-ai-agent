@@ -361,6 +361,96 @@ def build_run_detail(run_dir: str | Path) -> dict:
     }
 
 
+def build_defect_summary(results_dir: str | Path | None = None) -> dict:
+    """Aggregate defect counts for Bug Report summary (no per-run detail load)."""
+    from core.config import RESULT_DIR
+    if results_dir is None:
+        results_dir = RESULT_DIR
+    runs = list_runs(results_dir)
+    failed_runs = [r for r in runs if (r.get("status_counts") or {}).get("failed", 0) > 0]
+    total_failed_cases = sum((r.get("status_counts") or {}).get("failed", 0) for r in failed_runs)
+    return {
+        "total_failed_runs": len(failed_runs),
+        "total_failed_cases": total_failed_cases,
+        "failed_runs": failed_runs[:30],
+    }
+
+
+def build_failed_cases_flat(
+    results_dir: str | Path | None = None,
+    run_limit: int = 20,
+    case_limit: int = 200,
+) -> list[dict]:
+    """List failed cases across runs for Bug Report 'Failed cases' view."""
+    from core.config import RESULT_DIR
+    if results_dir is None:
+        results_dir = RESULT_DIR
+    root = Path(results_dir)
+    runs = list_runs(results_dir)
+    failed_runs = [r for r in runs if (r.get("status_counts") or {}).get("failed", 0) > 0][:run_limit]
+    flat = []
+    for r in failed_runs:
+        run_name = r.get("run_name", "")
+        run_dir = root / run_name
+        if not run_dir.exists() or not run_dir.is_dir():
+            continue
+        try:
+            detail = build_run_detail(run_dir)
+            for row in detail.get("case_rows", []):
+                if not row.get("is_failed"):
+                    continue
+                if len(flat) >= case_limit:
+                    return flat
+                flat.append({
+                    "run_name": run_name,
+                    "run_url": r.get("url", ""),
+                    "case_id": row.get("id", ""),
+                    "title": (row.get("field_map") or {}).get("Title", row.get("title", "")),
+                    "severity": row.get("severity", ""),
+                    "status": row.get("status", "failed"),
+                })
+        except Exception:
+            continue
+    return flat
+
+
+def build_failed_cases_by_severity(
+    results_dir: str | Path | None = None,
+    run_limit: int = 20,
+) -> dict:
+    """Group failed cases by severity for Bug Report 'By severity' view."""
+    from core.config import RESULT_DIR
+    if results_dir is None:
+        results_dir = RESULT_DIR
+    root = Path(results_dir)
+    runs = list_runs(results_dir)
+    failed_runs = [r for r in runs if (r.get("status_counts") or {}).get("failed", 0) > 0][:run_limit]
+    by_severity = {"Critical": [], "Major": [], "Minor": [], "Trivial": [], "": []}
+    for r in failed_runs:
+        run_name = r.get("run_name", "")
+        run_url = r.get("url", "")
+        run_dir = root / run_name
+        if not run_dir.exists() or not run_dir.is_dir():
+            continue
+        try:
+            detail = build_run_detail(run_dir)
+            for row in detail.get("case_rows", []):
+                if not row.get("is_failed"):
+                    continue
+                sev = (row.get("severity") or "").strip().title() or ""
+                if sev not in by_severity:
+                    by_severity[sev] = []
+                by_severity[sev].append({
+                    "run_name": run_name,
+                    "run_url": run_url,
+                    "case_id": row.get("id", ""),
+                    "title": (row.get("field_map") or {}).get("Title", row.get("title", "")),
+                })
+        except Exception:
+            continue
+    return by_severity
+
+
 def build_knowledge_snapshot(url: str = "", profiles_dir: str | Path | None = None) -> dict:
     from core.config import PROFILES_DIR
     if profiles_dir is None:
@@ -1313,6 +1403,30 @@ def _read_csv_rows(csv_path: Path) -> list[dict]:
         return list(csv.DictReader(handle))
 
 
+# Canonical CSV column names for Run Detail / UI. Alternate headers (e.g. Excel export, AI output) map to these.
+_CANONICAL_COLUMN_ALIASES = {
+    "Steps to Reproduce": ("steps to reproduce", "steps", "step to reproduce"),
+    "Expected Result": ("expected result", "expected", "expected results"),
+    "Actual Result": ("actual result", "actual", "actual results"),
+    "Language App": ("language app", "language", "language app"),
+    "Precondition": ("precondition", "preconditions"),
+}
+
+
+def _normalize_csv_row_keys(row: dict) -> dict:
+    """Ensure canonical column names exist so UI (e.g. Steps to Reproduce) always has a value."""
+    normalized = {str(k): str(v or "").strip() for k, v in row.items()}
+    key_lower = {k.strip().lower(): k for k in normalized.keys()}
+    for canonical, aliases in _CANONICAL_COLUMN_ALIASES.items():
+        if canonical in normalized:
+            continue
+        for alias in aliases:
+            if alias in key_lower:
+                normalized[canonical] = normalized[key_lower[alias]]
+                break
+    return normalized
+
+
 def _build_case_rows(
     csv_rows: list[dict],
     execution_results: dict,
@@ -1367,7 +1481,7 @@ def _build_case_rows(
 
     rows = []
     for index, row in enumerate(csv_rows, start=1):
-        normalized = {str(key): str(value or "").strip() for key, value in row.items()}
+        normalized = _normalize_csv_row_keys(row)
         case_id = normalized.get("ID") or f"ROW-{index:03d}"
         status = (normalized.get("Execution Status") or results_by_id.get(case_id, "")).strip().lower()
         automation = normalized.get("Automation", "").strip().lower()

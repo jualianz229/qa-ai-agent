@@ -337,7 +337,41 @@ def run_feature_case_generator(
         )
 
     console.print(f"  [green][OK][/green] CSV created: [dim]{saved_csv_path}[/dim]")
-    _job_step(4, "done")
+    
+    _job_step(5, "Membangun Execution Plan (Robot Logic)")
+    plan_data = build_execution_plan(parsed_data, page_model, url, site_profile=project_info.get("site_profile", {}))
+    
+    # Self-critique the plan for higher reliability
+    refined_plan_data = refine_execution_plan_with_self_critique(
+        url=url,
+        page_model=page_model,
+        page_scope=page_scope,
+        execution_plan=plan_data,
+        instruction=instruction
+    )
+    
+    plan_path = save_json_artifact(
+        refined_plan_data,
+        json_artifact_path(
+            project_info["run_dir"],
+            f"Execution_Plan_{project_info['safe_name']}_{project_info['timestamp']}.json",
+        ),
+    )
+    
+    validate_plan = validate_execution_plan(
+        plan=refined_plan_data,
+        page_model=page_model,
+        page_scope=page_scope,
+        page_info=page_info,
+    )
+    save_json_artifact(validate_plan, json_artifact_path(project_info["run_dir"], f"Execution_Plan_Validation_{project_info['safe_name']}_{project_info['timestamp']}.json"))
+    
+    console.print(f"  [green][OK][/green] Execution plan built: [dim]{plan_path}[/dim]")
+    
+    _job_step(5, "done")
+
+    usage_path = save_json_artifact(engine.usage_snapshot(), token_usage_path(Path(project_info["run_dir"])))
+    console.print(f"  [green][OK][/green] Token usage saved: [dim]{usage_path}[/dim]")
     _job_step(0, "Complete job")
     _job_step(0, "done")
     console.print(f"[bold green][FINISHED] Case Generator done. Hasil: {project_info['run_dir']}[/bold green]")

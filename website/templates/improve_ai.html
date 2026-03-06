@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}Improve our AI | TracePilot{% endblock %}
+{% block header_kicker %}AI Improvement{% endblock %}
+{% block header_title %}Improve our AI{% endblock %}
+{% block header_subtitle %}Human-in-the-loop: Monitor AI models, refine prompts, and approve autonomous decisions.{%
+endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="eyebrow">Human-AI feedback cycle</p>
+            <h2>Improvement Dashboard</h2>
+        </div>
+        <div class="metric-inline">
+            <span>{{ benchmark.get('overall_confidence', 0) }}% Avg Confidence</span>
+            <span>Unreviewed: {{ triage.get('unreviewed_count', 0) }}</span>
+        </div>
+    </div>
+
+    <div class="card full-width confidence-tips-card">
+        <h3>📈 Cara menaikkan confidence AI</h3>
+        <p class="text-dim">Lakukan hal berikut agar skor confidence generasi scenario dan kualitas AI lebih tinggi:</p>
+        <ul class="improve-list confidence-tips-list">
+            <li><strong>Perbesar jangkauan scan</strong> — Gunakan Mini crawl 5 halaman (atau lebih) agar coverage dan
+                depth naik.</li>
+            <li><strong>Bantu AI dengan instruksi jelas</strong> — Isi Custom Template dengan konteks modul, prioritas,
+                dan aturan testing.</li>
+            <li><strong>Jalankan E2E setelah generate</strong> — Sinyal eksekusi (passed/failed) ikut masuk ke
+                perhitungan confidence.</li>
+            <li><strong>Kurangi penolakan guardrail</strong> — Jika banyak scenario ditolak, perbaiki scope/instruksi
+                agar alignment naik.</li>
+            <li><strong>Gunakan feedback & run yang sama domain</strong> — Beri feedback di Run Detail; run dengan
+                URL/domain yang konsisten membantu historical signal.</li>
+            <li><strong>Lihat breakdown confidence</strong> — Di Run Detail, cek komponen (base_ai, coverage,
+                scope_alignment, execution_signal, anti_hallucination) untuk tahu mana yang perlu ditingkatkan.</li>
+        </ul>
+    </div>
+
+    <div class="card full-width">
+        <h3>✅ Checklist review run berisiko</h3>
+        <p class="text-dim">Gunakan checklist ini saat meninjau run dengan confidence atau safety rendah.</p>
+        <ul class="improve-list">
+            <li><label><input type="checkbox"> Crawl sudah cukup (Mini crawl ≥ 3 dan halaman penting sudah
+                    ter-cover).</label></li>
+            <li><label><input type="checkbox"> Instruksi di Custom Template jelas (modul, user journey utama, aturan
+                    bisnis).</label></li>
+            <li><label><input type="checkbox"> E2E Automation sudah dijalankan untuk scenario kritikal.</label></li>
+            <li><label><input type="checkbox"> Guardrail dan safety tidak banyak menolak scenario penting.</label></li>
+            <li><label><input type="checkbox"> Feedback manusia sudah diberikan di Run Detail untuk kasus yang
+                    salah.</label></li>
+            <li><label><input type="checkbox"> Token usage masih wajar (cek halaman Usage token untuk run ini).</label>
+            </li>
+        </ul>
+    </div>
+
+    <div class="grid-columns-2">
+        <div class="card">
+            <h3>📈 Model Quality</h3>
+            <p class="text-dim">Benchmark performance across latest generation jobs.</p>
+            <div class="stats-row">
+                <div class="stat-item">
+                    <span class="stat-val">{{ benchmark.get('execution_success_rate', 0) }}%</span>
+                    <span class="stat-label">Automation Success</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-val">{{ benchmark.get('grounding_score', 0) }}%</span>
+                    <span class="stat-label">AI Grounding (Anti-Hallucination)</span>
+                </div>
+            </div>
+            <a href="{{ url_for('benchmark_page') }}" class="primary-button ghost">View Full Benchmarks</a>
+        </div>
+
+        <div class="card">
+            <h3>📥 Triage Inbox</h3>
+            <p class="text-dim">High-risk runs requiring immediate human review/approval.</p>
+            <div class="triage-list">
+                {% for item in triage.get('high_priority_runs', [])[:4] %}
+                <div class="triage-item">
+                    <span class="icon">⚠️</span>
+                    <div class="triage-text">
+                        <strong>{{ item.get('run_name', '')[:20] }}</strong>
+                        <p>{{ item.get('reason', 'Requires manual verification') }}</p>
+                    </div>
+                </div>
+                {% else %}
+                <p class="empty-state">No high-risk runs pending review. 🛡️</p>
+                {% endfor %}
+            </div>
+            <a href="{{ url_for('triage_inbox_page') }}" class="primary-button ghost">Go to Inbox</a>
+        </div>
+    </div>
+
+    <div class="card full-width">
+        <h3>🛡️ Safety & Confidence Trends</h3>
+        <p class="text-dim">Latest AI safety audits and grounding analysis history.</p>
+        <div class="table-shell">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Run</th>
+                        <th>Confidence</th>
+                        <th>Safety Audit</th>
+                        <th>AI grounding</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for run in recent_runs %}
+                    <tr>
+                        <td><strong>{{ run.get('run_name', '')[:28] }}</strong></td>
+                        <td>
+                            <div class="confidence-bar-mini">
+                                <div class="confidence-fill"
+                                    style="--width: {{ run.get('confidence_percent', 0)|float }}%; width: var(--width);">
+                                </div>
+                                <span>{{ run.get('confidence_percent', 0) }}%</span>
+                            </div>
+                        </td>
+                        <td>
+                            <span
+                                class="badge {% if run.get('safety_index', 0) < 80 %}badge-failed{% else %}badge-passed{% endif %}">
+                                {{ run.get('safety_index', 0) }}/100
+                            </span>
+                        </td>
+                        <td>
+                            <span class="badge badge-skipped">{{ run.get('anti_hallucination_score', 0) }}%
+                                Grounded</span>
+                        </td>
+                        <td>
+                            <a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}"
+                                class="inline-mini-button">Refine Prompt</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <a href="{{ url_for('ai_safety_audit_page') }}" class="primary-button ghost">Explore AI Safety Audit</a>
+    </div>
+</section>
+
+<style>
+    .grid-columns-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-bottom: 24px;
+    }
+
+    .full-width {
+        grid-column: 1 / -1;
+    }
+
+    .card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-lg);
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .stats-row {
+        display: flex;
+        gap: 32px;
+        margin: 16px 0;
+    }
+
+    .stat-item {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .stat-val {
+        font-size: 1.8rem;
+        font-weight: 800;
+        color: var(--highlight);
+    }
+
+    .stat-label {
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .triage-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin: 16px 0;
+    }
+
+    .triage-item {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border-deep);
+    }
+
+    .triage-text strong {
+        display: block;
+        font-size: 0.9rem;
+    }
+
+    .triage-text p {
+        font-size: 0.8rem;
+        color: var(--text-dim);
+        margin-top: 2px;
+    }
+
+    .card h3 {
+        margin: 0;
+        font-size: 1.1rem;
+    }
+
+    .card .text-dim {
+        font-size: 0.85rem;
+        margin: 0;
+    }
+</style>
+{% endblock %}

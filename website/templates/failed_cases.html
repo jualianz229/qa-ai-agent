@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Failed Cases | TracePilot{% endblock %}
+{% block header_kicker %}Bug Report{% endblock %}
+{% block header_title %}Failed Cases{% endblock %}
+{% block header_subtitle %}Flat list of failed test cases across all runs.{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="eyebrow">Bug Report</p>
+            <h2>Failed Cases</h2>
+        </div>
+        <div class="metric-inline">
+            <span>{{ total_failed_cases or failed_cases|length }} failed cases</span>
+        </div>
+    </div>
+
+    <div class="table-shell">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Run</th>
+                    <th>Case ID</th>
+                    <th>Title</th>
+                    <th>Severity</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for case in failed_cases %}
+                <tr>
+                    <td>
+                        <a class="inline-link" href="{{ url_for('run_detail', run_name=case.get('run_name', '')) }}" title="{{ case.get('run_url', '') }}">{{ case.get('run_name', '')[:24] }}{% if (case.get('run_name', '')|length) > 24 %}...{% endif %}</a>
+                    </td>
+                    <td class="mono">{{ case.get('case_id', '') }}</td>
+                    <td>{{ (case.get('title', '') or '-')[:50] }}{% if (case.get('title', '')|length) > 50 %}...{% endif %}</td>
+                    <td><span class="badge badge-{{ 'danger' if (case.get('severity') or '')|lower == 'critical' else 'warning' if (case.get('severity') or '')|lower == 'major' else 'skipped' }}">{{ case.get('severity', '-') }}</span></td>
+                    <td>
+                        <a href="{{ url_for('run_detail', run_name=case.get('run_name', '')) }}" class="inline-mini-button">View run</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="empty-state">No failed cases found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if num_pages and num_pages > 1 %}
+    <div class="pagination-container">
+        <a href="{{ url_for('failed_cases_page', page=page-1) }}"
+            class="page-nav {% if page <= 1 %}disabled{% endif %}"
+            {% if page <= 1 %}onclick="return false;"{% endif %}>&lt;</a>
+        <div class="page-numbers">
+            {% for p in range(1, num_pages + 1) %}
+            <a href="{{ url_for('failed_cases_page', page=p) }}"
+                class="page-num {% if p == page %}active{% endif %}">{{ p }}</a>
+            {% endfor %}
+        </div>
+        <a href="{{ url_for('failed_cases_page', page=page+1) }}"
+            class="page-nav {% if page >= num_pages %}disabled{% endif %}"
+            {% if page >= num_pages %}onclick="return false;"{% endif %}>&gt;</a>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

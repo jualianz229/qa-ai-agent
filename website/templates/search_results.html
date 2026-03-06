@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Search | TracePilot{% endblock %}
+{% block header_kicker %}Global Search{% endblock %}
+{% block header_title %}Search results{% endblock %}
+{% block header_subtitle %}Cari run berdasarkan nama run atau URL target.{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="eyebrow">Search</p>
+            <h2>Runs matching "{{ query or '' }}"</h2>
+        </div>
+        <div class="panel-head-actions">
+            <span class="panel-badge">{{ results|length }} result(s)</span>
+        </div>
+    </div>
+
+    <div class="table-shell">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Run name</th>
+                    <th>URL</th>
+                    <th>Page type</th>
+                    <th>Safety</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in results %}
+                <tr>
+                    <td>
+                        <a class="inline-link" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">
+                            {{ run.get('run_name', '')[:32] }}{% if (run.get('run_name', '')|length) > 32 %}...{% endif %}
+                        </a>
+                    </td>
+                    <td title="{{ run.get('url', '') }}">{{ run.get('url', '')[:48] }}{% if (run.get('url', '')|length) > 48 %}...{% endif %}</td>
+                    <td><span class="panel-badge">{{ run.get('page_type') or "general" }}</span></td>
+                    <td>
+                        <span class="badge {% if run.get('safety_index', 0) < 70 %}badge-danger{% elif run.get('safety_index', 0) < 90 %}badge-warning{% else %}badge-success{% endif %}">
+                            {{ run.get('safety_index', 0) }}/100
+                        </span>
+                    </td>
+                    <td>
+                        <a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}" class="inline-mini-button">Open</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="empty-state">
+                        {% if query %}
+                        No runs found for "{{ query }}".
+                        {% else %}
+                        Type a keyword in the search box above to find runs.
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}
+

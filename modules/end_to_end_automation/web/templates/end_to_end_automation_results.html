@@ -3,28 +3,30 @@
 {% block header_kicker %}End-to-End Automation{% endblock %}
 {% block header_title %}Automation Results{% endblock %}
 {% block header_subtitle %}List of automation runs generated from test cases.{% endblock %}
+
 {% block content %}
 <section class="panel">
   <div class="panel-head">
     <div>
-      <p class="eyebrow">Automation runs</p>
-      <h1>Automation Results</h1>
+      <p class="eyebrow">Automation history</p>
+      <h2>Automation Results</h2>
     </div>
     <div class="metric-inline">
       <span>{{ metrics.get('automation_runs', 0) }} automation runs</span>
-      <span>{{ metrics.get('runs', 0) }} total runs</span>
+      <span>{{ total_count }} matching results</span>
     </div>
   </div>
-  <form class="filter-toolbar" action="{{ url_for('end_to_end_automation.automation_results_page') }}" method="get">
-    <label class="filter-field">
-      <span>Sort runs</span>
-      <select name="sort" onchange="this.form.submit()">
-        <option value="latest" {% if (sort_mode or 'latest' )=='latest' %}selected{% endif %}>Latest</option>
-        <option value="safety_risk" {% if sort_mode=='safety_risk' %}selected{% endif %}>Safety risk first</option>
-        <option value="failed_high" {% if sort_mode=='failed_high' %}selected{% endif %}>Most failed first</option>
-      </select>
-    </label>
-  </form>
+
+  <div class="toolbar-container">
+    <form class="search-form" action="{{ url_for('end_to_end_automation.automation_results_page') }}" method="get">
+      <div class="search-wrapper">
+        <span class="search-icon">🔍</span>
+        <input type="text" name="q" placeholder="Search by run name or URL..." value="{{ search_query }}"
+          autocomplete="off">
+      </div>
+    </form>
+  </div>
+
   <div class="table-shell">
     <table class="data-table">
       <thead>
@@ -42,14 +44,28 @@
       <tbody>
         {% for run in runs %}
         <tr>
-          <td><a class="inline-link" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">{{ run.get('run_name', '') }}</a>
+          <td>
+            <div class="run-identity">
+              <a class="inline-link" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">
+                <strong>{{ run.get('run_name', '')[:28] }}{% if (run.get('run_name', '')|length) > 28
+                  %}...{% endif %}</strong>
+              </a>
+              <p class="run-url-sub" title="{{ run.get('url', '') }}">{{ run.get('url', '')[:50] }}{% if
+                (run.get('url', '')|length) > 50 %}...{% endif %}</p>
+            </div>
           </td>
-          <td>{{ run.get('page_type') or "-" }}</td>
-          <td>{{ run.get('total_cases', 0) }}</td>
-          <td>{{ (run.status_counts or {}).get('passed', 0) }}</td>
-          <td>{{ (run.status_counts or {}).get('failed', 0) }}</td>
-          <td>{{ run.get('video_count', 0) }}</td>
-          <td><span class="confidence">{{ run.get('confidence_score', 0) }}</span></td>
+          <td><span class="panel-badge">{{ run.get('page_type') or "general" }}</span></td>
+          <td class="text-center">{{ run.get('total_cases', 0) }}</td>
+          <td class="text-center">{{ (run.status_counts or {}).get('passed', 0) }}</td>
+          <td class="text-center">{{ (run.status_counts or {}).get('failed', 0) }}</td>
+          <td class="text-center">{{ run.get('video_count', 0) }}</td>
+          <td>
+            <div class="confidence-bar-mini">
+              <div class="confidence-fill"
+                style="--width: {{ run.get('confidence_percent', 0)|float }}%; width: var(--width);"></div>
+              <span>{{ run.get('confidence_percent', 0) }}%</span>
+            </div>
+          </td>
           <td>
             <span
               class="badge {% if run.get('safety_status') == 'critical' %}badge-failed{% elif run.get('safety_status') == 'warning' %}badge-skipped{% else %}badge-passed{% endif %}">
@@ -59,11 +75,74 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="8">No automation results yet.</td>
+          <td colspan="8" class="empty-state">
+            {% if search_query %}
+            No results found for "{{ search_query }}". <a
+              href="{{ url_for('end_to_end_automation.automation_results_page') }}">Clear search</a>.
+            {% else %}
+            No automation results yet. Start by using the <a
+              href="{{ url_for('end_to_end_automation.automation_testing_page') }}">Automation Testing</a>.
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+
+  {% if num_pages > 1 %}
+  <div class="pagination-container">
+    <a href="{{ url_for('end_to_end_automation.automation_results_page', q=search_query, page=page-1) }}"
+      class="page-nav {% if page <= 1 %}disabled{% endif %}" {% if page <=1 %}onclick="return false;" {% endif %}>
+      &lt;
+    </a>
+
+    <div class="page-numbers">
+      {% for p in range(1, num_pages + 1) %}
+      <a href="{{ url_for('end_to_end_automation.automation_results_page', q=search_query, page=p) }}"
+        class="page-num {% if p == page %}active{% endif %}">
+        {{ p }}
+      </a>
+      {% endfor %}
+    </div>
+
+    <a href="{{ url_for('end_to_end_automation.automation_results_page', q=search_query, page=page+1) }}"
+      class="page-nav {% if page >= num_pages %}disabled{% endif %}" {% if page>= num_pages %}onclick="return
+      false;"{% endif %}>
+      &gt;
+    </a>
+  </div>
+  {% endif %}
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const searchInput = document.querySelector('input[name="q"]');
+      const searchForm = searchInput.form;
+      let timeout = null;
+
+      // Debounced auto-submit
+      searchInput.addEventListener('input', () => {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          // Save cursor position before submit
+          sessionStorage.setItem('search_cursor_pos', searchInput.selectionStart);
+          searchForm.submit();
+        }, 500); // 500ms delay after typing stops
+      });
+
+      // Restore focus and cursor position after reload
+      if (searchInput.value) {
+        searchInput.focus();
+        const pos = sessionStorage.getItem('search_cursor_pos');
+        if (pos !== null) {
+          searchInput.setSelectionRange(pos, pos);
+          sessionStorage.removeItem('search_cursor_pos');
+        } else {
+          // Move cursor to end of text
+          const len = searchInput.value.length;
+          searchInput.setSelectionRange(len, len);
+        }
+      }
+    });
+  </script>
 </section>
 {% endblock %}

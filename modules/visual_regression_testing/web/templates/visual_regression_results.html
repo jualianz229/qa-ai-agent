@@ -1,73 +1,159 @@
 {% extends "base.html" %}
-{% block title %}Visual Changes | TracePilot{% endblock %}
+{% block title %}Visual Results | TracePilot{% endblock %}
 {% block header_kicker %}Visual Regression Testing{% endblock %}
-{% block header_title %}Visual Changes{% endblock %}
-{% block header_subtitle %}Review changed visual runs and inspect text/style/layout deltas from baseline snapshots.{%
+{% block header_title %}Visual Results{% endblock %}
+{% block header_subtitle %}List of visual regression runs to inspect style/layout deltas from baseline snapshots.{%
 endblock %}
+
 {% block content %}
-
-
 <section class="panel">
   <div class="panel-head">
     <div>
-      <p class="eyebrow">Visual snapshot</p>
-      <h2>Changed runs</h2>
+      <p class="eyebrow">Visual snapshot history</p>
+      <h2>Visual Results</h2>
     </div>
-    <div class="artifact-groups">
-      <span class="panel-badge">{{ focus_runs|length }} visible</span>
-      <span class="panel-badge">Dev ID: {{ vrt_feature_id }}</span>
+    <div class="metric-inline">
+      <span>{{ metrics.get('vrt_runs', 0) }} visual runs</span>
+      <span>{{ total_count }} matching results</span>
     </div>
   </div>
-  <div class="run-grid">
-    {% for run in (focus_runs or []) %}
-    <article class="run-card run-card-featured">
-      <div class="run-card-top">
-        <span class="run-name">{{ run.get('run_name', '') }}</span>
-        <span class="badge {% if run.get('vrt_change_count', 0) %}badge-skipped{% else %}badge-passed{% endif %}">
-          {{ run.get('vrt_change_count', 0) }} changed
-        </span>
+
+  <div class="toolbar-container">
+    <form class="search-form" action="{{ url_for('visual_regression_testing.vrt_changes_page') }}" method="get">
+      <div class="search-wrapper">
+        <span class="search-icon">🔍</span>
+        <input type="text" name="q" placeholder="Search by run name or URL..." value="{{ search_query }}"
+          autocomplete="off">
       </div>
-      <h3>{{ run.get('title') or run.get('run_name', '') }}</h3>
-      <p>{{ run.get('url') or "-" }}</p>
-      <dl class="mini-stats">
-        <div>
-          <dt>Text</dt>
-          <dd>{{ (run.get('vrt_summary') or {}).get('text_change_count', 0) }}</dd>
-        </div>
-        <div>
-          <dt>Style</dt>
-          <dd>{{ (run.get('vrt_summary') or {}).get('style_change_count', 0) }}</dd>
-        </div>
-        <div>
-          <dt>Layout</dt>
-          <dd>{{ (run.get('vrt_summary') or {}).get('layout_change_count', 0) }}</dd>
-        </div>
-        <div>
-          <dt>Baseline</dt>
-          <dd>{{ run.get('vrt_baseline_run') or "-" }}</dd>
-        </div>
-        <div>
-          <dt>Visual status</dt>
-          <dd>{{ run.get('visual_regression_status') or "-" }}</dd>
-        </div>
-        <div>
-          <dt>Pixel diff</dt>
-          <dd>{{ ((run.get('visual_regression_ratio') or 0) * 100)|round(3) }}%</dd>
-        </div>
-        <div>
-          <dt>Approval</dt>
-          <dd>{{ run.get('visual_regression_approval_status') or "pending" }}</dd>
-        </div>
-      </dl>
-      <div class="artifact-groups">
-        <a class="artifact-link" href="{{ url_for('visual_regression_testing.vrt_monitor_page', run_name=run.get('run_name', '')) }}">Open Diff Monitor</a>
-        <a class="artifact-link" href="{{ url_for('visual_regression_testing.run_visual_diff_api', run_name=run.get('run_name', '')) }}">Open Visual Diff API</a>
-        <a class="artifact-link" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">Open run detail</a>
-      </div>
-    </article>
-    {% else %}
-    <p class="empty-state">No visual regression runs available for comparison yet.</p>
-    {% endfor %}
+    </form>
   </div>
+
+  <div class="table-shell">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Visual Run</th>
+          <th>Approval</th>
+          <th>Total changes</th>
+          <th>Text deltas</th>
+          <th>Style deltas</th>
+          <th>Layout deltas</th>
+          <th>Pixel diff</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr>
+          <td>
+            <div class="run-identity">
+              <a class="inline-link" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">
+                <strong>{{ run.get('run_name', '')[:28] }}{% if (run.get('run_name', '')|length) > 28
+                  %}...{% endif %}</strong>
+              </a>
+              <p class="run-url-sub" title="{{ run.get('url', '') }}">{{ run.get('url', '')[:50] }}{% if
+                (run.get('url', '')|length) > 50 %}...{% endif %}</p>
+            </div>
+          </td>
+          <td>
+            {% set app_stat = run.get('visual_regression_approval_status') %}
+            {% if app_stat == 'approved' %}
+            <span class="panel-badge badge-success">Approved</span>
+            {% elif app_stat == 'rejected' %}
+            <span class="panel-badge badge-danger">Rejected</span>
+            {% else %}
+            <span class="panel-badge" style="background: var(--bg-hover);">Pending</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            <span class="badge {% if run.get('vrt_change_count', 0) %}badge-skipped{% else %}badge-passed{% endif %}">
+              {{ run.get('vrt_change_count', 0) }}
+            </span>
+          </td>
+          <td class="text-center">{{ (run.get('vrt_summary') or {}).get('text_change_count', 0) }}</td>
+          <td class="text-center">{{ (run.get('vrt_summary') or {}).get('style_change_count', 0) }}</td>
+          <td class="text-center">{{ (run.get('vrt_summary') or {}).get('layout_change_count', 0) }}</td>
+          <td class="text-center">{{ ((run.get('visual_regression_ratio') or 0) * 100)|round(3) }}%</td>
+          <td>
+            <div class="action-cell">
+              <a class="inline-mini-button ghost"
+                href="{{ url_for('visual_regression_testing.vrt_monitor_page', run_name=run.get('run_name', '')) }}">Diff
+                Monitor</a>
+              <a class="inline-mini-button"
+                href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">Details</a>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="empty-state">
+            {% if search_query %}
+            No results found for "{{ search_query }}". <a
+              href="{{ url_for('visual_regression_testing.vrt_changes_page') }}">Clear search</a>.
+            {% else %}
+            No visual regression results yet. Start by using the <a
+              href="{{ url_for('visual_regression_testing.vrt_scan_page') }}">VRT Scanner</a>.
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if num_pages > 1 %}
+  <div class="pagination-container">
+    <a href="{{ url_for('visual_regression_testing.vrt_changes_page', q=search_query, page=page-1) }}"
+      class="page-nav {% if page <= 1 %}disabled{% endif %}" {% if page <=1 %}onclick="return false;" {% endif %}>
+      &lt;
+    </a>
+
+    <div class="page-numbers">
+      {% for p in range(1, num_pages + 1) %}
+      <a href="{{ url_for('visual_regression_testing.vrt_changes_page', q=search_query, page=p) }}"
+        class="page-num {% if p == page %}active{% endif %}">
+        {{ p }}
+      </a>
+      {% endfor %}
+    </div>
+
+    <a href="{{ url_for('visual_regression_testing.vrt_changes_page', q=search_query, page=page+1) }}"
+      class="page-nav {% if page >= num_pages %}disabled{% endif %}" {% if page>= num_pages %}onclick="return
+      false;"{% endif %}>
+      &gt;
+    </a>
+  </div>
+  {% endif %}
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const searchInput = document.querySelector('input[name="q"]');
+      const searchForm = searchInput.form;
+      let timeout = null;
+
+      // Debounced auto-submit
+      searchInput.addEventListener('input', () => {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          // Save cursor position before submit
+          sessionStorage.setItem('search_cursor_pos', searchInput.selectionStart);
+          searchForm.submit();
+        }, 500); // 500ms delay after typing stops
+      });
+
+      // Restore focus and cursor position after reload
+      if (searchInput.value) {
+        searchInput.focus();
+        const pos = sessionStorage.getItem('search_cursor_pos');
+        if (pos !== null) {
+          searchInput.setSelectionRange(pos, pos);
+          sessionStorage.removeItem('search_cursor_pos');
+        } else {
+          // Move cursor to end of text
+          const len = searchInput.value.length;
+          searchInput.setSelectionRange(len, len);
+        }
+      }
+    });
+  </script>
 </section>
 {% endblock %}

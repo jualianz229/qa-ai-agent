@@ -1,8 +1,1 @@
-Prioritize resilience when operations fail or degrade.
 
-Cover:
-- Validation error behavior and actionable guidance
-- Timeout, retry, and cancel behavior from user perspective
-- Partial-failure handling without breaking whole flow
-- Clear fallback state for network/service instability
-- Recoverability after error without forced hard refresh

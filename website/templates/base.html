@@ -53,20 +53,64 @@
                 </a>
                 <a href="{{ url_for('end_to_end_automation.automation_results_page') }}"
                     class="nav-link {% if '/automation-results' in request.path %}active{% endif %}">
-                    <span class="icon">🤖</span> <span>Automation Runs</span>
+                    <span class="icon">🤖</span> <span>Automation Results</span>
+                </a>
+                <a href="{{ url_for('visual_regression_testing.vrt_changes_page') }}"
+                    class="nav-link {% if '/visual-regression-testing/changes' in request.path %}active{% endif %}">
+                    <span class="icon">👁️</span> <span>Visual Results</span>
+                </a>
+            </div>
+
+            <div class="nav-section">
+                <p class="nav-label">Bug Report</p>
+                <a href="{{ url_for('defect_summary_page') }}"
+                    class="nav-link {% if request.path == '/bug-report/summary' %}active{% endif %}">
+                    <span class="icon">📋</span> <span>Defect summary</span>
+                </a>
+                <a href="{{ url_for('bug_report_page') }}"
+                    class="nav-link {% if request.path == '/bug-report' %}active{% endif %}">
+                    <span class="icon">🐛</span> <span>Runs with failures</span>
+                </a>
+                <a href="{{ url_for('failed_cases_page') }}"
+                    class="nav-link {% if '/bug-report/failed-cases' in request.path %}active{% endif %}">
+                    <span class="icon">📌</span> <span>Failed cases</span>
+                </a>
+                <a href="{{ url_for('by_severity_page') }}"
+                    class="nav-link {% if '/bug-report/by-severity' in request.path %}active{% endif %}">
+                    <span class="icon">⚠️</span> <span>By severity</span>
+                </a>
+            </div>
+
+            <div class="nav-section">
+                <p class="nav-label">AI Improvement</p>
+                <a href="{{ url_for('improve_ai_page') }}"
+                    class="nav-link {% if '/improve-ai' in request.path %}active{% endif %}">
+                    <span class="icon">✨</span> <span>Improve our AI</span>
                 </a>
                 <a href="{{ url_for('benchmark_page') }}"
                     class="nav-link {% if '/benchmarks' in request.path %}active{% endif %}">
                     <span class="icon">🎯</span> <span>Benchmarks</span>
                 </a>
+                <a href="{{ url_for('triage_inbox_page') }}"
+                    class="nav-link {% if '/triage-inbox' in request.path %}active{% endif %}">
+                    <span class="icon">📥</span> <span>Triage inbox</span>
+                </a>
+                <a href="{{ url_for('ai_safety_audit_page') }}"
+                    class="nav-link {% if '/ai-safety-audit' in request.path %}active{% endif %}">
+                    <span class="icon">🛡️</span> <span>AI Safety Audit</span>
+                </a>
+                <a href="{{ url_for('usage_token_page') }}"
+                    class="nav-link {% if '/usage-token' in request.path %}active{% endif %}">
+                    <span class="icon">🪙</span> <span>Usage token</span>
+                </a>
             </div>
 
-            {% if sidebar_scenario_runs %}
+            {% if sidebar_recent_activity %}
             <div class="nav-section">
-                <p class="nav-label">Recent Scenarios</p>
-                {% for run in (sidebar_scenario_runs or [])[:6] %}
+                <p class="nav-label">Recent Activity</p>
+                {% for run in (sidebar_recent_activity or [])[:6] %}
                 <a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}" class="nav-link">
-                    <span class="icon">⚡</span> <span>{{ (run.get('run_name') or '')[:18] }}...</span>
+                    <span class="icon">⚡</span> <span>{{ (run.get('run_name') or '')[:18] }}{% if (run.get('run_name') or '')|length > 18 %}...{% endif %}</span>
                 </a>
                 {% endfor %}
             </div>
@@ -76,10 +120,45 @@
 
     <main class="main-content">
         <header class="page-header">
-            <p class="eyebrow">{% block header_kicker %}{% endblock %}</p>
-            <h1>{% block header_title %}TracePilot{% endblock %}</h1>
+            <div class="page-header-top">
+                <div class="page-header-main">
+                    <p class="eyebrow">{% block header_kicker %}{% endblock %}</p>
+                    <h1>{% block header_title %}TracePilot{% endblock %}</h1>
+                </div>
+                <form class="global-search-form" action="{{ url_for('global_search_page') }}" method="get">
+                    <div class="global-search-input-wrapper">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" name="q" placeholder="Search runs by name or URL..."
+                            value="{{ request.args.get('q', '') }}" autocomplete="off" class="global-search-input">
+                    </div>
+                </form>
+            </div>
             <p class="subtitle">{% block header_subtitle %}Create and manage website test scenarios easily.{% endblock
                 %}</p>
+            {% block header_breadcrumbs %}
+            <nav class="breadcrumbs">
+                <a href="{{ url_for('home') }}">Overview</a>
+                {% if '/scenario-testing' in request.path %}
+                <span>/</span><span>Case Generator</span>
+                {% elif '/scenario-results' in request.path %}
+                <span>/</span><a href="{{ url_for('test_case_generator.scenario_results_page') }}">Scenario Results</a>
+                {% elif '/automation-testing' in request.path %}
+                <span>/</span><span>E2E Automation</span>
+                {% elif '/automation-results' in request.path %}
+                <span>/</span><span>Automation Results</span>
+                {% elif '/visual-regression' in request.path %}
+                <span>/</span><span>Visual Regression</span>
+                {% elif '/bug-report' in request.path %}
+                <span>/</span><span>Bug Report</span>
+                {% elif '/improve-ai' in request.path %}
+                <span>/</span><span>Improve AI</span>
+                {% elif '/usage-token' in request.path %}
+                <span>/</span><span>Usage token</span>
+                {% elif '/search' in request.path %}
+                <span>/</span><span>Search</span>
+                {% endif %}
+            </nav>
+            {% endblock %}
         </header>
 
         {% block content %}{% endblock %}

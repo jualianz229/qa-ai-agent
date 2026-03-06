@@ -28,6 +28,12 @@
         </form>
     </div>
 
+    <p class="confidence-tip-inline">
+        Tip: Naikkan confidence dengan <strong>Run E2E</strong>, <strong>Mini crawl</strong> lebih banyak halaman, dan
+        <strong>instruksi jelas</strong> di Custom Template.
+        <a href="{{ url_for('improve_ai_page') }}">Improve AI</a>
+    </p>
+
     <div class="table-shell">
         <table class="data-table">
             <thead>
@@ -58,7 +64,9 @@
                     <td class="text-center">{{ run.get('total_cases', 0) }}</td>
                     <td>
                         <div class="confidence-bar-mini">
-                            <div class="confidence-fill" style="width: {{ run.get('confidence_percent', 0) }}%"></div>
+                            <div class="confidence-fill"
+                                style="--width: {{ run.get('confidence_percent', 0)|float }}%; width: var(--width);">
+                            </div>
                             <span>{{ run.get('confidence_percent', 0) }}%</span>
                         </div>
                     </td>
@@ -158,159 +166,4 @@
     </script>
 </section>
 
-<style>
-    .toolbar-container {
-        display: flex;
-        justify-content: flex-end;
-        margin-bottom: 20px;
-        padding: 0 4px;
-    }
-
-    .search-wrapper {
-        position: relative;
-        width: 320px;
-    }
-
-    .search-icon {
-        position: absolute;
-        left: 14px;
-        top: 50%;
-        transform: translateY(-50%);
-        font-size: 0.9rem;
-        color: var(--text-dim);
-        pointer-events: none;
-        opacity: 0.7;
-    }
-
-    .search-wrapper input {
-        width: 100%;
-        background: var(--bg-deep);
-        border: 1px solid var(--border-subtle);
-        border-radius: 10px;
-        padding: 12px 14px 12px 42px;
-        color: var(--text-main);
-        font-size: 0.9rem;
-        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
-    }
-
-    .search-wrapper input:focus {
-        outline: none;
-        border-color: var(--highlight);
-        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
-        background: var(--bg-card);
-    }
-
-    .run-identity {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-
-    .run-url-sub {
-        font-size: 0.75rem;
-        color: var(--text-dim);
-        margin: 0;
-        opacity: 0.8;
-    }
-
-    .confidence-bar-mini {
-        width: 110px;
-        height: 14px;
-        background: var(--bg-deep);
-        border-radius: 10px;
-        position: relative;
-        overflow: hidden;
-        display: inline-flex;
-        align-items: center;
-        border: 1px solid var(--border-subtle);
-    }
-
-    .confidence-fill {
-        height: 100%;
-        background: linear-gradient(90deg, #4f46e5, #818cf8);
-        transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .confidence-bar-mini span {
-        position: absolute;
-        width: 100%;
-        text-align: center;
-        font-size: 0.65rem;
-        font-weight: 700;
-        color: #fff;
-        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-        z-index: 1;
-    }
-
-    .action-cell {
-        display: flex;
-        gap: 10px;
-    }
-
-    .text-center {
-        text-align: center;
-    }
-
-    .pagination-container {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        gap: 16px;
-        margin-top: 32px;
-        padding: 24px 0;
-        border-top: 1px solid var(--border-subtle);
-    }
-
-    .page-numbers {
-        display: flex;
-        gap: 8px;
-    }
-
-    .page-nav,
-    .page-num {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        min-width: 36px;
-        height: 36px;
-        border-radius: 8px;
-        background: var(--bg-deep);
-        border: 1px solid var(--border-subtle);
-        color: var(--text-main);
-        text-decoration: none;
-        font-size: 0.9rem;
-        font-weight: 600;
-        transition: all 0.2s ease;
-    }
-
-    .page-nav:hover:not(.disabled),
-    .page-num:hover:not(.active) {
-        background: var(--bg-card);
-        border-color: var(--highlight);
-        color: var(--highlight);
-        transform: translateY(-1px);
-    }
-
-    .page-num.active {
-        background: var(--highlight);
-        border-color: var(--highlight);
-        color: white;
-        box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
-    }
-
-    .page-nav.disabled {
-        opacity: 0.3;
-        cursor: not-allowed;
-        filter: grayscale(1);
-        pointer-events: none;
-    }
-
-    .empty-state {
-        padding: 60px !important;
-        text-align: center;
-        color: var(--text-dim);
-        font-style: italic;
-    }
-</style>
 {% endblock %}

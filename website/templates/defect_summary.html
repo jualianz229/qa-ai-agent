@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Defect Summary | TracePilot{% endblock %}
+{% block header_kicker %}Bug Report{% endblock %}
+{% block header_title %}Defect Summary{% endblock %}
+{% block header_subtitle %}Overview of failed runs and unresolved cases.{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <div class="panel-head">
+        <div>
+            <p class="eyebrow">Bug Report</p>
+            <h2>Defect Summary</h2>
+        </div>
+        <div class="metric-inline">
+            <span>{{ summary.get('total_failed_runs', 0) }} failed runs</span>
+            <span>{{ summary.get('total_failed_cases', 0) }} failed cases</span>
+        </div>
+    </div>
+
+    <div class="stats-grid" style="margin-bottom: 1.5rem;">
+        <div class="stat-card">
+            <div class="stat-label">Failed runs</div>
+            <div class="stat-value danger">{{ summary.get('total_failed_runs', 0) }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Failed cases (total)</div>
+            <div class="stat-value danger">{{ summary.get('total_failed_cases', 0) }}</div>
+        </div>
+    </div>
+
+    <div class="bug-report-quick-links">
+        <p class="text-dim" style="margin-bottom: 0.75rem;">Quick links</p>
+        <ul class="improve-list" style="list-style: none; padding-left: 0;">
+            <li><a href="{{ url_for('bug_report_page') }}">Runs with failures</a> — List of runs that have at least one failed case</li>
+            <li><a href="{{ url_for('failed_cases_page') }}">Failed cases</a> — Flat list of all failed test cases across runs</li>
+            <li><a href="{{ url_for('by_severity_page') }}">By severity</a> — Failed cases grouped by Critical / Major / Minor / Trivial</li>
+        </ul>
+    </div>
+
+    {% if summary.get('failed_runs') %}
+    <h3 style="font-size: 1rem; margin: 1.25rem 0 0.5rem;">Recent failed runs</h3>
+    <div class="table-shell">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Run</th>
+                    <th>Failed</th>
+                    <th>Passed</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in summary.get('failed_runs', []) %}
+                <tr>
+                    <td>
+                        <a class="inline-link" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">{{ run.get('run_name', '')[:36] }}{% if (run.get('run_name', '')|length) > 36 %}...{% endif %}</a>
+                    </td>
+                    <td><span class="label-danger">{{ (run.get('status_counts') or {}).get('failed', 0) }}</span></td>
+                    <td><span class="label-success">{{ (run.get('status_counts') or {}).get('passed', 0) }}</span></td>
+                    <td>
+                        <a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}" class="inline-mini-button">Details</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if num_pages and num_pages > 1 %}
+    <div class="pagination-container">
+        <a href="{{ url_for('defect_summary_page', page=page-1) }}"
+            class="page-nav {% if page <= 1 %}disabled{% endif %}"
+            {% if page <= 1 %}onclick="return false;"{% endif %}>&lt;</a>
+        <div class="page-numbers">
+            {% for p in range(1, num_pages + 1) %}
+            <a href="{{ url_for('defect_summary_page', page=p) }}"
+                class="page-num {% if p == page %}active{% endif %}">{{ p }}</a>
+            {% endfor %}
+        </div>
+        <a href="{{ url_for('defect_summary_page', page=page+1) }}"
+            class="page-nav {% if page >= num_pages %}disabled{% endif %}"
+            {% if page >= num_pages %}onclick="return false;"{% endif %}>&gt;</a>
+    </div>
+    {% endif %}
+    {% else %}
+    <p class="empty-state" style="margin-top: 1rem;">No failed runs. Everything looks clean.</p>
+    {% endif %}
+</section>
+<style>
+.label-danger { color: var(--danger); font-weight: 600; }
+.label-success { color: var(--success); font-weight: 600; }
+</style>
+{% endblock %}

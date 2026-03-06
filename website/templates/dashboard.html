@@ -37,9 +37,25 @@
                 <p class="eyebrow">Live jobs</p>
                 <h3><span class="icon">⏳</span> Execution queue</h3>
             </div>
-            <button id="dashboard-refresh-jobs" class="ghost-button" type="button">Refresh queue</button>
+            <div class="section-header-actions">
+                <div class="job-filters">
+                    <select id="dashboard-filter-feature" class="select-compact">
+                        <option value="all">All features</option>
+                        <option value="scenario">Case Generator</option>
+                        <option value="automation">E2E Automation</option>
+                        <option value="vrt">Visual Regression</option>
+                    </select>
+                    <select id="dashboard-filter-status" class="select-compact">
+                        <option value="all">All status</option>
+                        <option value="running">Running / queued</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                </div>
+                <button id="dashboard-refresh-jobs" class="ghost-button" type="button">Refresh queue</button>
+            </div>
         </div>
-        <div id="dashboard-job-list" class="job-list">
+        <div id="dashboard-job-list" class="job-list card-scroll-shell">
             <p class="empty-state">Loading…</p>
         </div>
     </section>
@@ -49,49 +65,53 @@
             <h3><span class="icon">📋</span> Recent Execution Runs</h3>
             <a href="{{ url_for('end_to_end_automation.automation_results_page') }}" class="view-all">View all</a>
         </div>
-        <table class="table-minimal">
-            <thead>
-                <tr>
-                    <th>Run Name</th>
-                    <th>Status</th>
-                    <th>Cases</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for run in runs[:5] %}
-                <tr>
-                    <td><a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">{{ (run.get('run_name') or '')[:15] }}...</a></td>
-                    <td>
-                        <span
-                            class="badge {% if (run.status_counts or {}).get('failed', 0) > 0 %}badge-danger{% else %}badge-success{% endif %}">
-                            {{ "FAILED" if (run.status_counts or {}).get('failed', 0) > 0 else "PASSED" }}
-                        </span>
-                    </td>
-                    <td>{{ run.get('total_cases', 0) }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="card-scroll-shell">
+            <table class="table-minimal">
+                <thead>
+                    <tr>
+                        <th>Run Name</th>
+                        <th>Status</th>
+                        <th>Cases</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for run in runs[:8] %}
+                    <tr>
+                        <td><a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">{{ (run.get('run_name') or '')[:18] }}{% if (run.get('run_name') or '')|length > 18 %}...{% endif %}</a></td>
+                        <td>
+                            <span
+                                class="badge {% if (run.status_counts or {}).get('failed', 0) > 0 %}badge-danger{% else %}badge-success{% endif %}">
+                                {{ "FAILED" if (run.status_counts or {}).get('failed', 0) > 0 else "PASSED" }}
+                            </span>
+                        </td>
+                        <td>{{ run.get('total_cases', 0) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </section>
 
     <section class="dashboard-section card">
         <div class="section-header">
             <h3><span class="icon">📚</span> Knowledge Snapshot</h3>
         </div>
-        <div class="knowledge-stats">
-            <div class="k-stat">
-                <span class="k-label">Profiles</span>
-                <span class="k-value">{{ knowledge_snapshot.get('total_profiles', 0) }}</span>
+        <div class="card-scroll-shell">
+            <div class="knowledge-stats">
+                <div class="k-stat">
+                    <span class="k-label">Profiles</span>
+                    <span class="k-value">{{ knowledge_snapshot.get('total_profiles', 0) }}</span>
+                </div>
+                <div class="k-stat">
+                    <span class="k-label">Learned Patterns</span>
+                    <span class="k-value">{{ knowledge_snapshot.get('total_patterns', 0) }}</span>
+                </div>
             </div>
-            <div class="k-stat">
-                <span class="k-label">Learned Patterns</span>
-                <span class="k-value">{{ knowledge_snapshot.get('total_patterns', 0) }}</span>
+            <div class="tag-cloud">
+                {% for cluster in (knowledge_snapshot.get('top_clusters') or [])[:20] %}
+                <span class="tag">{{ cluster }}</span>
+                {% endfor %}
             </div>
-        </div>
-        <div class="tag-cloud">
-            {% for cluster in (knowledge_snapshot.get('top_clusters') or [])[:12] %}
-            <span class="tag">{{ cluster }}</span>
-            {% endfor %}
         </div>
     </section>
 
@@ -99,16 +119,18 @@
         <div class="section-header">
             <h3><span class="icon">⚠️</span> Reliability Risks</h3>
         </div>
-        <div class="risk-list">
-            {% for run in risk_runs[:4] %}
-            <div class="risk-item">
-                <div class="risk-icon danger">!</div>
-                <div class="risk-content">
-                    <p class="risk-title">{{ run.get('run_name', '') }}</p>
-                    <p class="risk-meta">Safety index: {{ run.get('safety_index', 0) }}% · Alerts: {{ run.get('alert_count', 0) }}</p>
+        <div class="card-scroll-shell">
+            <div class="risk-list">
+                {% for run in risk_runs[:10] %}
+                <div class="risk-item">
+                    <div class="risk-icon danger">!</div>
+                    <div class="risk-content">
+                        <p class="risk-title">{{ run.get('run_name', '') }}</p>
+                        <p class="risk-meta">Safety index: {{ run.get('safety_index', 0) }}% · Alerts: {{ run.get('alert_count', 0) }}</p>
+                    </div>
                 </div>
+                {% endfor %}
             </div>
-            {% endfor %}
         </div>
     </section>
 </div>
@@ -117,6 +139,11 @@
 (function () {
   var container = document.getElementById("dashboard-job-list");
   var refreshBtn = document.getElementById("dashboard-refresh-jobs");
+  var filterFeatureEl = document.getElementById("dashboard-filter-feature");
+  var filterStatusEl = document.getElementById("dashboard-filter-status");
+  var lastJobs = [];
+  var currentFeatureFilter = "all";
+  var currentStatusFilter = "all";
   if (!container) return;
 
   function sourceLabelFromMode(m) {
@@ -136,14 +163,41 @@
     return { stepsHtml: "", hasSteps: false, tokenUsed: tokenUsed };
   }
 
+  function getJobFeature(job) {
+    var payload = job && job.payload || {};
+    var mode = String(payload.mode || "").toLowerCase();
+    var feature = String(payload.feature || "").toLowerCase();
+    if (feature === "case-generator") return "scenario";
+    if (mode === "automation_test") return "automation";
+    if (mode === "vrt_scan") return "vrt";
+    return "other";
+  }
+
+  function applyFilters(jobs) {
+    return (jobs || []).filter(function (job) {
+      var statusValue = String(job.status || "").toLowerCase();
+      var featureKey = getJobFeature(job);
+      if (currentFeatureFilter !== "all" && featureKey !== currentFeatureFilter) return false;
+      if (currentStatusFilter === "running") {
+        if (!(statusValue === "running" || statusValue === "queued")) return false;
+      } else if (currentStatusFilter === "completed") {
+        if (statusValue !== "completed") return false;
+      } else if (currentStatusFilter === "failed") {
+        if (statusValue !== "failed") return false;
+      }
+      return true;
+    });
+  }
+
   function renderJobs(jobs) {
     if (!container) return;
-    if (!Array.isArray(jobs) || !jobs.length) {
+    var filtered = applyFilters(jobs);
+    if (!Array.isArray(filtered) || !filtered.length) {
       container.innerHTML = "<p class=\"empty-state\">No active jobs yet.</p>";
       return;
     }
     container.innerHTML = "";
-    jobs.slice(0, 8).forEach(function (job) {
+    filtered.slice(0, 8).forEach(function (job) {
       var statusValue = String(job.status || "").toLowerCase();
       var isRunning = statusValue === "running" || statusValue === "queued";
       var section = buildSection(job, isRunning);
@@ -185,14 +239,26 @@
   function loadJobs() {
     if (!container) return;
     fetch("/api/jobs").then(function (r) { return r.json(); }).then(function (data) {
-      var list = Array.isArray(data.jobs) ? data.jobs : [];
-      renderJobs(list);
+      lastJobs = Array.isArray(data.jobs) ? data.jobs : [];
+      renderJobs(lastJobs);
     }).catch(function () {
       container.innerHTML = "<p class=\"empty-state\">Failed to load queue.</p>";
     });
   }
 
   if (refreshBtn) refreshBtn.addEventListener("click", loadJobs);
+  if (filterFeatureEl) {
+    filterFeatureEl.addEventListener("change", function () {
+      currentFeatureFilter = filterFeatureEl.value || "all";
+      renderJobs(lastJobs);
+    });
+  }
+  if (filterStatusEl) {
+    filterStatusEl.addEventListener("change", function () {
+      currentStatusFilter = filterStatusEl.value || "all";
+      renderJobs(lastJobs);
+    });
+  }
   loadJobs();
 })();
 </script>

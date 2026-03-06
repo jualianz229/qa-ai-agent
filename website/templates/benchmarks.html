@@ -10,48 +10,77 @@ endblock %}
 {% block content %}
 <div class="stats-grid">
     <div class="stat-card">
-        <div class="stat-label">Total Benchmarked</div>
-        <div class="stat-value">{{ benchmark.get('total_benchmarked', 0) }}</div>
-        <div class="stat-sub">{{ benchmark.get('last_updated', '') }}</div>
+        <div class="stat-label">Total Cases Analysed</div>
+        <div class="stat-value">{{ benchmark.get('total_cases', 0) }}</div>
+        <div class="stat-sub">Across latest {{ (benchmark.get('results', [])|length) }} runs</div>
     </div>
     <div class="stat-card">
         <div class="stat-label">Avg. Safety Index</div>
         <div
-            class="stat-value {% if benchmark.get('avg_safety_index', 0) < 70 %}danger{% elif benchmark.get('avg_safety_index', 0) < 90 %}warning{% else %}highlight{% endif %}">
-            {{ benchmark.get('avg_safety_index', 0) }}%</div>
+            class="stat-value {% if benchmark.get('average_safety_index', 0) < 70 %}danger{% elif benchmark.get('average_safety_index', 0) < 90 %}warning{% else %}highlight{% endif %}">
+            {{ benchmark.get('average_safety_index', 0)|round(0)|int }}%
+        </div>
+        <div class="stat-sub">Policy compliance health</div>
     </div>
     <div class="stat-card">
         <div class="stat-label">AI Reliability</div>
-        <div class="stat-value highlight">{{ benchmark.get('ai_reliability') or "N/A" }}%</div>
+        <div class="stat-value highlight">{{ ((benchmark.get('average_confidence', 0)|float) * 100)|round(0)|int }}%
+        </div>
+        <div class="stat-sub">Composite confidence score</div>
     </div>
 </div>
 
 <div class="dashboard-grid">
     <section class="dashboard-section card" style="grid-column: span 2;">
         <div class="section-header">
-            <h3><span class="icon">📈</span> Historical Performance</h3>
+            <h3><span class="icon">📈</span> Historical AI Benchmarks</h3>
+            <span class="panel-badge">Model Quality: {{ (benchmark.get('average_heuristic_alignment', 0) * 100)|round(1)
+                }}%</span>
         </div>
         <div class="table-shell">
             <table class="table-minimal">
                 <thead>
                     <tr>
-                        <th>Date</th>
                         <th>Run Name</th>
-                        <th>Total Cases</th>
-                        <th>Passed</th>
-                        <th>Failed</th>
-                        <th>Safety Index</th>
+                        <th>Grounding</th>
+                        <th>Stability</th>
+                        <th>Safety</th>
+                        <th>Drift</th>
+                        <th>Consistency</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for run in (benchmark.history or []) %}
+                    {% for run in (benchmark.get('results', []) or []) %}
                     <tr>
-                        <td>{{ (run.created_at or '')[:10] }}</td>
-                        <td><a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">{{ (run.get('run_name') or '')[:15] }}...</a></td>
-                        <td>{{ run.get('total_cases', 0) }}</td>
-                        <td>{{ (run.status_counts or {}).get('passed', 0) }}</td>
-                        <td><span class="{% if (run.status_counts or {}).get('failed', 0) > 0 %}danger{% endif %}">{{ (run.status_counts or {}).get('failed', 0) }}</span></td>
-                        <td>{{ run.get('safety_index', 0) }}%</td>
+                        <td>
+                            <a class="inline-link" href="{{ url_for('run_detail', run_name=run.get('name', '')) }}">
+                                <strong>{{ run.get('name', '')[:20] }}</strong>
+                            </a>
+                        </td>
+                        <td>
+                            <div class="confidence-bar-mini" title="Grounding score">
+                                <div class="confidence-fill"
+                                    style="--width: {{ ((run.get('grounding_coverage', run.get('average_grounding_coverage', 0))|float * 100)|round(0)) }}%; width: var(--width);">
+                                </div>
+                                <span>{{ ((run.get('grounding_coverage', run.get('average_grounding_coverage',
+                                    0))|float) * 100)|round(0)|int }}%</span>
+                            </div>
+                        </td>
+                        <td>{{ ((run.get('stability', run.get('average_stability', 0))|float) * 100)|round(0)|int }}%
+                        </td>
+                        <td>
+                            <span
+                                class="badge {% if run.get('safety_index', 0) < 70 %}badge-danger{% elif run.get('safety_index', 0) < 90 %}badge-warning{% else %}badge-success{% endif %}">
+                                {{ run.get('safety_index', 0) }}
+                            </span>
+                        </td>
+                        <td>{{ (run.get('api_drift_score', 0) * 100)|round(1) }}%</td>
+                        <td>{{ (run.get('replay_consistency', 0) * 100)|round(0)|int }}%</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="empty-state">No benchmark data available. Run more test scenarios to
+                            generate analysis.</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -61,11 +90,35 @@ endblock %}
 
     <section class="dashboard-section card">
         <div class="section-header">
-            <h3><span class="icon">🎯</span> Analysis Insight</h3>
+            <h3><span class="icon">🎯</span> Model Insights</h3>
         </div>
         <div class="summary-content">
-            <p>{{ benchmark.get('insight') or "No insights available yet for your latest benchmark data. Keep running more
-                tests to gather data." }}</p>
+            <div class="improve-list">
+                <div class="improve-item">
+                    <span class="improve-label">Grounding Coverage</span>
+                    <span class="improve-value">{{ (benchmark.get('average_grounding_coverage', 0) * 100)|round(1)
+                        }}%</span>
+                </div>
+                <div class="improve-item">
+                    <span class="improve-label">Heuristic Alignment</span>
+                    <span class="improve-value">{{ (benchmark.get('average_heuristic_alignment', 0) * 100)|round(1)
+                        }}%</span>
+                </div>
+                <div class="improve-item">
+                    <span class="improve-label">Blocked Execution</span>
+                    <span class="improve-value danger">{{ (benchmark.get('blocked_execution_rate', 0) * 100)|round(1)
+                        }}%</span>
+                </div>
+                <div class="improve-item">
+                    <span class="improve-label">Policy Failures</span>
+                    <span class="improve-value danger">{{ (benchmark.get('policy_pack_failure_rate', 0) * 100)|round(1)
+                        }}%</span>
+                </div>
+            </div>
+            <p class="helper-text" style="margin-top: var(--space-md);">
+                Insights are derived from AI audit logs and cross-stage analysis.
+                Higher grounding and stability scores lead to more reliable automation.
+            </p>
         </div>
     </section>
 </div>

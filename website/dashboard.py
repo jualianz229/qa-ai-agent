@@ -35,13 +35,23 @@ from core.config import (
     FEEDBACK_DIR,
 )
 # Setup main logging
-from core.utils import form_bool, load_json_file, setup_logging, get_logger
+from core.utils import (
+    form_bool,
+    load_json_file,
+    setup_logging,
+    get_logger,
+    is_automation_run,
+    is_automation_or_recovery_run,
+)
 setup_logging()
 logger = get_logger("website.dashboard")
 
 from core.dashboard_data import (
     build_ai_safety_audit,
     build_benchmark_snapshot,
+    build_defect_summary,
+    build_failed_cases_by_severity,
+    build_failed_cases_flat,
     build_knowledge_snapshot,
     build_run_comparison,
     build_run_detail,
@@ -92,10 +102,11 @@ app.register_blueprint(visual_regression_testing_bp)
 
 
 @app.context_processor
-def inject_sidebar_scenario_runs():
-    runs = [item for item in list_runs(RESULT_DIR) if not is_automation_or_recovery_run(item.get("run_name", ""))]
+def inject_sidebar_runs():
+    """Recent Activity: all runs (scenarios, automation, VRT, recovery) sorted by latest."""
+    runs = list_runs(RESULT_DIR)
     runs = sorted(runs, key=lambda item: float(item.get("modified_ts", 0) or 0), reverse=True)[:12]
-    return {"sidebar_scenario_runs": runs}
+    return {"sidebar_recent_activity": runs}
 
 
 def _resolve_run_dir(run_name: str) -> Path:
@@ -201,8 +212,289 @@ def compare_runs():
 
 @app.get("/benchmarks")
 def benchmark_page():
-    benchmark_snapshot = build_benchmark_snapshot(RESULT_DIR, limit=10)
-    return render_template("benchmarks.html", benchmark=benchmark_snapshot, metrics=dashboard_metrics())
+    # Pass metrics to sidebar
+    benchmark_data = build_benchmark_snapshot(RESULT_DIR)
+    return render_template(
+        "benchmarks.html",
+        benchmark=benchmark_data,
+        metrics=dashboard_metrics()
+    )
+
+
+@app.get("/bug-report")
+def bug_report_page():
+    """Bug Report – central place for failed cases and defect tracking. Paginated, max 10 per page."""
+    runs = list_runs(RESULT_DIR)
+    query = (request.args.get("q", "") or "").strip()
+    failed_runs = [r for r in runs if (r.get("status_counts") or {}).get("failed", 0) > 0]
+    if query:
+        q = query.lower()
+        failed_runs = [
+            r
+            for r in failed_runs
+            if q in (r.get("run_name", "") or "").lower()
+            or q in (r.get("url", "") or "").lower()
+        ]
+    failed_runs = sort_runs(failed_runs, mode="latest")
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    per_page = 10
+    total_count = len(failed_runs)
+    num_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
+    page = max(1, min(page, num_pages))
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_runs = failed_runs[start_idx:end_idx]
+    return render_template(
+        "bug_report.html",
+        failed_runs=paginated_runs,
+        total_failed_runs=total_count,
+        search_query=query,
+        page=page,
+        num_pages=num_pages,
+        per_page=per_page,
+        metrics=dashboard_metrics(),
+    )
+
+
+@app.get("/bug-report/summary")
+def defect_summary_page():
+    """Defect summary – total failed runs/cases and quick links (Bug Report). Paginated recent runs, max 10 per page."""
+    summary = build_defect_summary(RESULT_DIR)
+    failed_runs = list(summary.get("failed_runs", []))
+    total_failed_runs = len(failed_runs)
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    per_page = 10
+    num_pages = (total_failed_runs + per_page - 1) // per_page if total_failed_runs > 0 else 1
+    page = max(1, min(page, num_pages))
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_failed_runs = failed_runs[start_idx:end_idx]
+    summary_for_view = dict(summary)
+    summary_for_view["failed_runs"] = paginated_failed_runs
+    return render_template(
+        "defect_summary.html",
+        summary=summary_for_view,
+        total_failed_runs=total_failed_runs,
+        page=page,
+        num_pages=num_pages,
+        per_page=per_page,
+        metrics=dashboard_metrics(),
+    )
+
+
+@app.get("/bug-report/failed-cases")
+def failed_cases_page():
+    """Failed cases – flat list of failed test cases across runs (Bug Report). Paginated, max 10 per page."""
+    cases = build_failed_cases_flat(RESULT_DIR, run_limit=25, case_limit=200)
+    total_count = len(cases)
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    per_page = 10
+    num_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
+    page = max(1, min(page, num_pages))
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_cases = cases[start_idx:end_idx]
+    return render_template(
+        "failed_cases.html",
+        failed_cases=paginated_cases,
+        total_failed_cases=total_count,
+        page=page,
+        num_pages=num_pages,
+        per_page=per_page,
+        metrics=dashboard_metrics(),
+    )
+
+
+@app.get("/bug-report/by-severity")
+def by_severity_page():
+    """By severity – failed cases grouped by severity (Bug Report). Paginated, max 10 per page."""
+    by_severity_full = build_failed_cases_by_severity(RESULT_DIR, run_limit=25)
+    order = ["Critical", "Major", "Minor", "Trivial", ""]
+    flat: list[tuple[str, dict]] = []
+    for sev in order:
+        for item in by_severity_full.get(sev, []):
+            flat.append((sev, item))
+    for sev, items in by_severity_full.items():
+        if sev not in order:
+            for item in items:
+                flat.append((sev, item))
+    total_count = len(flat)
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    per_page = 10
+    num_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
+    page = max(1, min(page, num_pages))
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    page_flat = flat[start_idx:end_idx]
+    by_severity_page_map: dict[str, list[dict]] = {}
+    for sev, item in page_flat:
+        by_severity_page_map.setdefault(sev, []).append(item)
+    return render_template(
+        "by_severity.html",
+        by_severity=by_severity_page_map,
+        total_failed_cases=total_count,
+        page=page,
+        num_pages=num_pages,
+        per_page=per_page,
+        metrics=dashboard_metrics(),
+    )
+
+
+@app.get("/improve-ai")
+def improve_ai_page():
+    """Improve our AI – benchmarks, feedback, and learning."""
+    benchmark_snapshot = build_benchmark_snapshot(RESULT_DIR, limit=5)
+    knowledge_snapshot = build_knowledge_snapshot(profiles_dir=PROFILES_DIR)
+    triage_snapshot = build_triage_inbox(RESULT_DIR, limit=6)
+    safety_audit = build_ai_safety_audit(RESULT_DIR, limit=30)
+    runs = list_runs(RESULT_DIR)[:10]
+    return render_template(
+        "improve_ai.html",
+        benchmark=benchmark_snapshot,
+        knowledge_snapshot=knowledge_snapshot,
+        triage=triage_snapshot,
+        safety_audit=safety_audit,
+        recent_runs=runs,
+        metrics=dashboard_metrics(),
+    )
+
+
+@app.get("/triage-inbox")
+def triage_inbox_page():
+    """Triage inbox – runs that need review (safety, failures, regression)."""
+    triage_snapshot = build_triage_inbox(RESULT_DIR, limit=30)
+    return render_template(
+        "triage_inbox.html",
+        triage=triage_snapshot,
+        metrics=dashboard_metrics(),
+    )
+
+
+@app.get("/ai-safety-audit")
+def ai_safety_audit_page():
+    """AI Safety Audit – overall safety and recommended focus."""
+    safety_audit = build_ai_safety_audit(RESULT_DIR, limit=100)
+    return render_template(
+        "ai_safety_audit.html",
+        audit=safety_audit,
+        metrics=dashboard_metrics(),
+    )
+
+
+@app.get("/search")
+def global_search_page():
+    """Global search – find runs by name or URL."""
+    query = (request.args.get("q", "") or "").strip()
+    results: list[dict] = []
+    if query:
+        q = query.lower()
+        runs = list_runs(RESULT_DIR)
+        for run in runs:
+            name = (run.get("run_name", "") or "").lower()
+            url = (run.get("url", "") or "").lower()
+            if q in name or q in url:
+                results.append(run)
+        results = results[:50]
+    return render_template(
+        "search_results.html",
+        query=query,
+        results=results,
+        metrics=dashboard_metrics(),
+    )
+
+
+@app.get("/usage-token")
+def usage_token_page():
+    """Usage token – list all runs with AI token usage (all activity). Paginated like scenario-results, max 10 per page."""
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    per_page = 10
+    runs = list_runs(RESULT_DIR)
+    rows = []
+    total_aggregate = 0
+    total_input_agg = 0
+    total_output_agg = 0
+    feature_totals: dict[str, int] = {"scenario": 0, "automation": 0, "vrt": 0, "other": 0}
+    expensive_threshold = 50000
+    for run in runs:
+        run_name = run.get("run_name", "")
+        summary = (run.get("token_usage") or {}).get("summary") or run.get("token_usage_summary") or {}
+        total_tok = int(summary.get("estimated_total_tokens", 0) or 0)
+        input_tok = int(summary.get("estimated_input_tokens", 0) or 0)
+        output_tok = int(summary.get("estimated_output_tokens", 0) or 0)
+        calls = int(summary.get("calls", 0) or 0)
+        total_aggregate += total_tok
+        total_input_agg += input_tok
+        total_output_agg += output_tok
+        if is_automation_or_recovery_run(run_name):
+            feature = "automation"
+        elif int(run.get("vrt_change_count", 0) or 0) > 0 or str(run.get("visual_regression_status", "") or "").strip():
+            feature = "vrt"
+        else:
+            feature = "scenario"
+        feature_totals[feature] = feature_totals.get(feature, 0) + total_tok
+        is_expensive = bool(total_tok and total_tok >= expensive_threshold)
+        if feature == "scenario":
+            feature_label = "Case Generator & scope"
+        elif feature == "automation":
+            feature_label = "E2E Automation"
+        elif feature == "vrt":
+            feature_label = "Visual Regression"
+        else:
+            feature_label = "Other"
+        rows.append({
+            "run_name": run_name,
+            "total_tokens": total_tok,
+            "input_tokens": input_tok,
+            "output_tokens": output_tok,
+            "calls": calls,
+            "modified_ts": run.get("modified_ts", 0),
+            "feature": feature,
+            "feature_label": feature_label,
+            "is_expensive": is_expensive,
+        })
+    rows.sort(key=lambda x: (-x["total_tokens"], -float(x["modified_ts"] or 0)))
+    total_count = len(rows)
+    num_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
+    page = max(1, min(page, num_pages))
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_rows = rows[start_idx:end_idx]
+    feature_shares: dict[str, int] = {}
+    if total_aggregate > 0:
+        for key, value in feature_totals.items():
+            feature_shares[key] = int(round((float(value or 0) / float(total_aggregate)) * 100))
+    else:
+        feature_shares = {key: 0 for key in feature_totals.keys()}
+    return render_template(
+        "usage_token.html",
+        rows=paginated_rows,
+        total_runs=total_count,
+        total_tokens=total_aggregate,
+        total_input=total_input_agg,
+        total_output=total_output_agg,
+        feature_totals=feature_totals,
+        feature_shares=feature_shares,
+        expensive_threshold=expensive_threshold,
+        page=page,
+        num_pages=num_pages,
+        per_page=per_page,
+        metrics=dashboard_metrics(),
+    )
 
 
 @app.get("/artifacts/<run_name>/<path:relative_path>")
