@@ -254,7 +254,10 @@
                   <span>AI is thinking...</span>
                 </div>` : ""}
             </div>
-            <span class="status-indicator status-${statusValue}">${statusValue}</span>
+            <div class="job-header-actions">
+              ${isRunning ? `<button class="inline-mini-button danger" type="button" data-cancel-job="${job.id}">Cancel</button>` : ""}
+              <span class="status-indicator status-${statusValue}">${statusValue}</span>
+            </div>
           </header>
           <div class="job-meta">
             <span class="panel-badge">Source: ${sourceLabel}</span>
@@ -305,14 +308,27 @@
           }
         });
       });
-      inlineJobs.querySelectorAll("[data-log-toggle]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const card = button.closest(".job-card");
-          const pre = card?.querySelector(".job-log-viewer");
-          if (!pre) return;
-          const collapsed = pre.classList.toggle("is-collapsed");
-          button.textContent = collapsed ? "Show more" : "Show less";
-          pre.textContent = collapsed ? (pre.dataset.previewLog || "") : (pre.dataset.fullLog || "");
+      inlineJobs.querySelectorAll("[data-cancel-job]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const jobId = button.getAttribute("data-cancel-job");
+          if (!jobId || button.disabled) return;
+          if (!confirm("Are you sure you want to cancel this job?")) return;
+
+          button.disabled = true;
+          button.textContent = "Cancelling...";
+          try {
+            const response = await fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error(payload.error || "Failed to cancel job.");
+            }
+            button.textContent = "Cancelled";
+            refreshInlineQueue();
+          } catch (error) {
+            alert(error.message);
+            button.disabled = false;
+            button.textContent = "Cancel";
+          }
         });
       });
     }
@@ -348,7 +364,7 @@
         if (!stillRunning && currentScenarioJobId) {
           window.clearInterval(inlineQueueTimer);
           inlineQueueTimer = 0;
-          try { window.sessionStorage.removeItem(jobIdStorageKey); } catch (_e) {}
+          try { window.sessionStorage.removeItem(jobIdStorageKey); } catch (_e) { }
           status.textContent = currentState === "failed" ? "Test case run failed. Check queue log." : "Test case run finished.";
         }
         if (hasVisibleJobs && inlineQueuePanel) {
@@ -410,7 +426,7 @@
     document.getElementById("scenario-crawl-limit")?.addEventListener("change", saveTemplateDraft);
     document.getElementById("scenario-recrawl")?.addEventListener("change", saveTemplateDraft);
 
-    try { currentScenarioJobId = String(sessionStorage.getItem(jobIdStorageKey) || ""); } catch (_e) {}
+    try { currentScenarioJobId = String(sessionStorage.getItem(jobIdStorageKey) || ""); } catch (_e) { }
     loadTemplateDraft();
     (async () => {
       const draft = loadTemplateDraft();
@@ -450,7 +466,7 @@
           throw new Error(payload.error || "Failed to generate test case.");
         }
         currentScenarioJobId = String(payload?.job?.id || "");
-        try { window.sessionStorage.setItem(jobIdStorageKey, currentScenarioJobId); } catch (_e) {}
+        try { window.sessionStorage.setItem(jobIdStorageKey, currentScenarioJobId); } catch (_e) { }
         status.textContent = "Test case job is running...";
         if (inlineQueuePanel) {
           inlineQueuePanel.classList.remove("hidden-panel");

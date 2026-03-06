@@ -64,7 +64,7 @@ from core.instruction_templates import (
     save_uploaded_template,
     update_instruction_template,
 )
-from core.jobs import get_all_jobs, get_job
+from core.jobs import get_all_jobs, get_job, cancel_job
 from core.result_analyzer import analyze_execution_results, save_execution_summary
 from core.scanner import Scanner
 from core.site_profiles import derive_cluster_keys, merge_execution_learning
@@ -321,6 +321,14 @@ def job_detail_api(job_id: str):
     except KeyError:
         abort(404)
     return jsonify({"job": job})
+
+
+@app.post("/api/jobs/<job_id>/cancel")
+def cancel_job_api(job_id: str):
+    success = cancel_job(job_id)
+    if success:
+        return jsonify({"ok": True, "message": "Job cancelled."})
+    return jsonify({"ok": False, "error": "Could not cancel job or job not running."}), 400
 
 
 @app.get("/api/runs")

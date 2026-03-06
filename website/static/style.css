@@ -38,6 +38,7 @@ a {
   color: var(--accent);
   text-decoration: none;
 }
+
 a:hover {
   text-decoration: underline;
 }
@@ -201,9 +202,17 @@ h1 {
   margin-bottom: 0.2rem;
 }
 
-.stat-value.danger { color: var(--danger); }
-.stat-value.warning { color: var(--warning); }
-.stat-value.highlight { color: var(--accent); }
+.stat-value.danger {
+  color: var(--danger);
+}
+
+.stat-value.warning {
+  color: var(--warning);
+}
+
+.stat-value.highlight {
+  color: var(--accent);
+}
 
 .stat-sub {
   font-size: 0.8rem;
@@ -246,7 +255,10 @@ h1 {
   font-size: 0.85rem;
   font-weight: 500;
 }
-.view-all:hover { text-decoration: underline; }
+
+.view-all:hover {
+  text-decoration: underline;
+}
 
 /* Form – jelas untuk orang awam */
 .form-stack {
@@ -376,17 +388,20 @@ textarea:focus {
   font-weight: 600;
 }
 
-.badge-success, .badge-passed {
+.badge-success,
+.badge-passed {
   background: rgba(63, 185, 80, 0.15);
   color: var(--success);
 }
 
-.badge-danger, .badge-failed {
+.badge-danger,
+.badge-failed {
   background: rgba(248, 81, 73, 0.15);
   color: var(--danger);
 }
 
-.badge-warning, .badge-skipped {
+.badge-warning,
+.badge-skipped {
   background: rgba(210, 153, 34, 0.15);
   color: var(--warning);
 }
@@ -427,10 +442,65 @@ textarea:focus {
   border-radius: 4px;
 }
 
-.status-success { background: rgba(63, 185, 80, 0.15); color: var(--success); }
-.status-running, .status-queued { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
-.status-error, .status-failed { background: rgba(248, 81, 73, 0.15); color: var(--danger); }
-.status-completed { background: rgba(63, 185, 80, 0.15); color: var(--success); }
+.job-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.inline-mini-button {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-light);
+  color: var(--text-muted);
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.inline-mini-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
+}
+
+.inline-mini-button.danger {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.2);
+}
+
+.inline-mini-button.danger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: #f87171;
+}
+
+.inline-mini-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.status-success {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--success);
+}
+
+.status-running,
+.status-queued {
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+}
+
+.status-error,
+.status-failed {
+  background: rgba(248, 81, 73, 0.15);
+  color: var(--danger);
+}
+
+.status-completed {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--success);
+}
 
 .progress-bar {
   height: 6px;
@@ -470,9 +540,17 @@ textarea:focus {
   border-radius: 50%;
 }
 
-.dot-red { background: #ff5f56; }
-.dot-yellow { background: #ffbd2e; }
-.dot-green { background: #27c93f; }
+.dot-red {
+  background: #ff5f56;
+}
+
+.dot-yellow {
+  background: #ffbd2e;
+}
+
+.dot-green {
+  background: #27c93f;
+}
 
 .terminal-title {
   font-size: 0.7rem;
@@ -525,7 +603,9 @@ textarea:focus {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .ai-thinking-group {
@@ -548,8 +628,15 @@ textarea:focus {
   flex-direction: column;
 }
 
-.k-label { font-size: 0.8rem; color: var(--text-muted); }
-.k-value { font-size: 1.2rem; font-weight: 700; }
+.k-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.k-value {
+  font-size: 1.2rem;
+  font-weight: 700;
+}
 
 .tag-cloud {
   display: flex;
@@ -599,8 +686,16 @@ textarea:focus {
   color: var(--danger);
 }
 
-.risk-title { font-size: 0.9rem; font-weight: 600; margin-bottom: 0.2rem; }
-.risk-meta { font-size: 0.8rem; color: var(--text-muted); }
+.risk-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+}
+
+.risk-meta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
 
 .empty-state,
 .empty-msg {
@@ -636,7 +731,10 @@ textarea:focus {
   color: var(--accent);
   font-weight: 500;
 }
-.inline-link:hover { text-decoration: underline; }
+
+.inline-link:hover {
+  text-decoration: underline;
+}
 
 .inline-mini-button {
   display: inline-block;
@@ -744,9 +842,17 @@ textarea:focus {
 /* Responsif */
 /* Job status border */
 .job-card.job-running,
-.job-card.job-queued { border-left: 3px solid var(--accent); }
-.job-card.job-completed { border-left: 3px solid var(--success); }
-.job-card.job-failed { border-left: 3px solid var(--danger); }
+.job-card.job-queued {
+  border-left: 3px solid var(--accent);
+}
+
+.job-card.job-completed {
+  border-left: 3px solid var(--success);
+}
+
+.job-card.job-failed {
+  border-left: 3px solid var(--danger);
+}
 
 .job-error-summary {
   font-size: 0.85rem;
@@ -761,7 +867,10 @@ textarea:focus {
   margin-right: 1rem;
   margin-bottom: 0.35rem;
 }
-.artifact-link:hover { text-decoration: underline; }
+
+.artifact-link:hover {
+  text-decoration: underline;
+}
 
 .artifact-groups {
   margin-top: var(--space);
@@ -790,13 +899,35 @@ textarea:focus {
   margin-bottom: 0.5rem;
 }
 
-.run-name { font-weight: 600; font-size: 0.95rem; }
-.mini-stats { display: flex; flex-wrap: wrap; gap: 1rem; margin: 0.5rem 0; font-size: 0.85rem; }
-.mini-stats dt { color: var(--text-muted); }
-.mini-stats dd { font-weight: 600; margin-left: 0; }
+.run-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
 
-.insight-list { margin-top: var(--space); }
-.danger { color: var(--danger); }
+.mini-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+}
+
+.mini-stats dt {
+  color: var(--text-muted);
+}
+
+.mini-stats dd {
+  font-weight: 600;
+  margin-left: 0;
+}
+
+.insight-list {
+  margin-top: var(--space);
+}
+
+.danger {
+  color: var(--danger);
+}
 
 @media (max-width: 768px) {
   .sidebar {
@@ -804,15 +935,19 @@ textarea:focus {
     height: auto;
     position: relative;
   }
+
   body {
     flex-direction: column;
   }
+
   .main-content {
     padding: var(--space);
   }
+
   .stats-grid {
     grid-template-columns: 1fr 1fr;
   }
+
   .dashboard-grid {
     grid-template-columns: 1fr;
   }

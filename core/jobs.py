@@ -19,6 +19,7 @@ logger = get_logger("core.jobs")
 jobs_lock = threading.Lock()
 _JOBS_FILE = RESULT_DIR / "jobs.json"
 jobs: dict[str, dict] = load_json_file(_JOBS_FILE) if _JOBS_FILE.exists() else {}
+active_processes: dict[str, subprocess.Popen] = {}
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 def _save_jobs_locked():
@@ -88,6 +89,9 @@ def run_logged_process(job_id: str, command: list[str], cwd: str, timeout: int =
         errors="replace",
     )
 
+    with jobs_lock:
+        active_processes[job_id] = process
+
     def cleanup_process():
         if process.poll() is None:
             try:
@@ -98,15 +102,20 @@ def run_logged_process(job_id: str, command: list[str], cwd: str, timeout: int =
                 logger.warning(f"Killed orphan child processes for job {job_id}")
             except Exception:
                 pass
+        with jobs_lock:
+            active_processes.pop(job_id, None)
 
     atexit.register(cleanup_process)
 
     line_queue: queue.Queue[str] = queue.Queue()
 
     def reader() -> None:
-        assert process.stdout is not None
-        for line in process.stdout:
-            line_queue.put(strip_ansi(line.rstrip()))
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                line_queue.put(strip_ansi(line.rstrip()))
+        except Exception:
+            pass
 
     reader_thread = threading.Thread(target=reader, daemon=True)
     reader_thread.start()
@@ -137,9 +146,33 @@ def run_logged_process(job_id: str, command: list[str], cwd: str, timeout: int =
         append_job_log(job_id, line)
 
     reader_thread.join(timeout=1)
+    cleanup_process()
     atexit.unregister(cleanup_process)
     logger.info(f"Job {job_id} finished with exit code {exit_code}")
     return exit_code
+
+def cancel_job(job_id: str) -> bool:
+    with jobs_lock:
+        process = active_processes.get(job_id)
+        if not process:
+            # Maybe it's queued but not running yet?
+            if job_id in jobs and jobs[job_id].get("status") == "queued":
+                jobs[job_id]["status"] = "failed"
+                jobs[job_id]["log_lines"].append("[CANCELLED] Job removed from queue.")
+                _save_jobs_locked()
+                return True
+            return False
+            
+    try:
+        parent = psutil.Process(process.pid)
+        for child in parent.children(recursive=True):
+            child.kill()
+        parent.kill()
+        logger.info(f"Successfully cancelled job {job_id}")
+        return True
+    except Exception as exc:
+        logger.error(f"Failed to cancel job {job_id}: {exc}")
+        return False
 
 
 def generate_run_name(url: str) -> str:
