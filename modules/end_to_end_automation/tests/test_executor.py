@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from core.artifacts import json_artifact_path
-from core.executor import CodeGenerator
+from modules.end_to_end_automation.src.executor import CodeGenerator
 
 
 class ExecutorTests(unittest.TestCase):

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.flaky_bank import load_flaky_snapshot, merge_flaky_history
+from modules.end_to_end_automation.src.flaky_bank import load_flaky_snapshot, merge_flaky_history
 
 
 class FlakyBankTests(unittest.TestCase):

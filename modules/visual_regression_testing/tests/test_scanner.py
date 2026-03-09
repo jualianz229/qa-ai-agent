@@ -122,7 +122,7 @@ class ScannerTests(unittest.TestCase):
             project_info = {"run_dir": tmp, "safe_name": "example", "timestamp": "20260302_120000"}
             page_info = {
                 "url": "https://example.com",
-                "vrt_testing": {
+                "visual_regression": {
                     "baseline_run": "example_20260301_120000",
                     "has_baseline": True,
                     "has_changes": True,
@@ -130,8 +130,9 @@ class ScannerTests(unittest.TestCase):
                     "snapshot_summary": {"element_count": 10},
                     "diff_summary": {"total_changed": 3, "text_change_count": 1},
                     "changed_areas": [{"area": "main > h1", "change_type": "changed"}],
+                    "status": "baseline_created"
                 },
-                "visual_regression": {"status": "baseline_created", "has_baseline": False},
+                "visual_render_regression": {"status": "baseline_created"},
             }
             snapshot_path, diff_path = self.scanner.save_visual_regression_artifacts(page_info, project_info)
             self.assertEqual(snapshot_path.parent.name, "JSON")

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.case_memory import load_case_memory_snapshot, merge_case_memory
+from modules.test_case_generator.src.case_memory import load_case_memory_snapshot, merge_case_memory
 
 
 class CaseMemoryTests(unittest.TestCase):

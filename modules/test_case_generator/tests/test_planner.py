@@ -1,6 +1,6 @@
 import unittest
 
-from core.planner import build_execution_plan, build_normalized_page_model
+from modules.test_case_generator.src.planner import build_execution_plan, build_normalized_page_model
 
 
 class PlannerTests(unittest.TestCase):
