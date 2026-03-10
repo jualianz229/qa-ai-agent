@@ -10,6 +10,7 @@ from modules.test_case_generator.src.case_memory import load_case_memory_snapsho
 from core.confidence import build_historical_confidence_signal, compute_composite_confidence
 from core.guardrails import build_allowed_vocabulary, build_task_contract, validate_page_scope, validate_test_scenarios
 from core.site_profiles import get_failure_memory, get_ranked_selector_candidates
+from core.utils import repair_json
 
 load_dotenv()
 
@@ -22,8 +23,9 @@ You will be provided with:
 2. Specific instructions from the USER.
 
 === YOUR OUTPUT MUST BE STRICTLY JSON ===
-Generate a comprehensive list of Test Scenarios in strict JSON array format.
-MAXIMIZE THE NUMBER OF TEST CASES! You MUST include:
+Generate a list of Test Scenarios in strict JSON array format.
+While you should aim for thorough coverage, ensure that the JSON is perfectly well-formed and valid.
+You MUST include:
 - Positive test cases (Happy paths)
 - Negative test cases (Invalid inputs)
 - Edge cases / Boundary values
@@ -35,6 +37,7 @@ ID, Module, Category, Test Type, Risk Rating, Anchored Selector, Title, Precondi
 
 CRITICAL RULES:
 - ONLY output a valid JSON array of objects.
+- Property names MUST be enclosed in double quotes (e.g., "ID": "NAV-001").
 - 'Risk Rating' must be one of: High, Medium, Low. Calculate this based on a 3x3 Risk Matrix (Impact x Probability).
 - 'Anchored Selector' MUST be a concrete element ID, data-testid, or unique DOM path found in the provided context (e.g., "#login-btn", "form > input[name=email]"). If no specific element, use the nearest section ID or heading.
 - Do NOT include markdown formatting like ```json or ```.
@@ -350,13 +353,19 @@ class AIEngine:
             if raw.endswith("```"):
                 raw = raw[:-3]
 
+            raw = repair_json(raw.strip())
             try:
-                parsed_data = json.loads(raw.strip())
+                parsed_data = json.loads(raw)
                 normalized = [self._normalize_scenario(item) for item in parsed_data]
             except Exception as e:
-                if attempt == 1:
-                    raise ValueError(f"Failed to parse AI output as JSON: {e}\nRaw Output: {raw[:200]}...")
-                correction_notes = [f"Return strict JSON only. Parsing failed: {e}"]
+                # If we fail to parse, try to reduce requested volume for next attempt
+                if scenario_volume["target_count"] > 16:
+                    scenario_volume["target_count"] = max(16, int(scenario_volume["target_count"] * 0.75))
+                    scenario_volume["min_valid_count"] = max(6, int(scenario_volume["target_count"] * 0.4))
+                
+                if attempt == max_attempts - 1:
+                    raise ValueError(f"Failed to parse AI output as JSON: {e}\nRaw Output Snippet: {raw[:300]}...")
+                correction_notes = [f"Return strict JSON only. Parsing failed: {e}. Try generating fewer scenarios if output size is an issue."]
                 continue
 
             normalized, critique_report = self._self_critique_and_refine_cases(normalized, allowed, page_scope, custom_instruction)
@@ -407,15 +416,16 @@ class AIEngine:
                 "self_critique": quality["self_critique"],
                 "ai_quality": quality["ai_quality"],
             }
-            valid_case_count = len(validation["valid_cases"])
-            if valid_case_count >= scenario_volume["min_valid_count"] and (validation["is_valid"] or attempt == max_attempts - 1):
-                if validation["valid_cases"]:
+            valid_case_count = len(validation.get("valid_cases", []))
+            if valid_case_count >= scenario_volume["min_valid_count"] and (validation.get("is_valid") or attempt == max_attempts - 1):
+                if validation.get("valid_cases"):
                     return self._prioritize_cases_by_risk(validation["valid_cases"], page_scope, feedback_signal)
-                raise ValueError("AI scenarios were rejected by grounding validator and no valid cases remained.")
-            if attempt == max_attempts - 1 and validation["valid_cases"]:
-                return self._prioritize_cases_by_risk(validation["valid_cases"], page_scope, feedback_signal)
-            correction_notes = validation["issues"][:8]
-            correction_notes.extend(quality["ai_quality"].get("retry_hints", [])[:3])
+            
+            if attempt == max_attempts - 1:
+                return self._prioritize_cases_by_risk(validation.get("valid_cases", []), page_scope, feedback_signal)
+            
+            correction_notes = validation.get("issues", [])[:8]
+            correction_notes.extend(quality.get("ai_quality", {}).get("retry_hints", [])[:3])
             if validation.get("rejected_cases"):
                 correction_notes.extend(
                     f"{item.get('case', {}).get('ID', 'UNKNOWN')}: {', '.join(item.get('issues', [])[:2])}"
@@ -426,7 +436,7 @@ class AIEngine:
                     f"Increase grounded scenarios: produced {valid_case_count}, minimum required {scenario_volume['min_valid_count']}."
                 )
 
-        raise ValueError("AI scenario generation failed after grounding retries.")
+        return []
 
     def analyze_page_scope(
         self,
@@ -530,11 +540,12 @@ class AIEngine:
             if raw.endswith("```"):
                 raw = raw[:-3]
 
+            raw = repair_json(raw.strip())
             try:
-                parsed = json.loads(raw.strip())
+                parsed = json.loads(raw)
             except Exception as e:
                 if attempt == 1:
-                    raise ValueError(f"Failed to parse page scope analysis as JSON: {e}\nRaw Output: {raw[:200]}...")
+                    raise ValueError(f"Failed to parse page scope analysis as JSON: {e}\nRaw Output Snippet: {raw[:300]}...")
                 correction_notes = [f"Return strict JSON only. Parsing failed: {e}"]
                 continue
 

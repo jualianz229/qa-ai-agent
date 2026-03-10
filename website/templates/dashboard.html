@@ -80,8 +80,8 @@
                         <td><a href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">{{ (run.get('run_name') or '')[:18] }}{% if (run.get('run_name') or '')|length > 18 %}...{% endif %}</a></td>
                         <td>
                             <span
-                                class="badge {% if (run.status_counts or {}).get('failed', 0) > 0 %}badge-danger{% else %}badge-success{% endif %}">
-                                {{ "FAILED" if (run.status_counts or {}).get('failed', 0) > 0 else "PASSED" }}
+                                class="badge {% if run.get('generation_incomplete', False) or (run.status_counts or {}).get('failed', 0) > 0 %}badge-danger{% else %}badge-success{% endif %}">
+                                {{ "FAILED" if run.get('generation_incomplete', False) or (run.status_counts or {}).get('failed', 0) > 0 else "PASSED" }}
                             </span>
                         </td>
                         <td>{{ run.get('total_cases', 0) }}</td>

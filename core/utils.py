@@ -70,6 +70,51 @@ def is_automation_run(run_name: str) -> bool:
     return "_auto_" in str(run_name or "").strip().lower()
 
 
+import re
+
+def repair_json(raw: str) -> str:
+    """Try to fix common JSON formatting issues from AI output."""
+    if not raw:
+        return ""
+    
+    # Try to extract JSON content between first and last brackets/braces
+    start_bracket = raw.find('[')
+    start_brace = raw.find('{')
+    
+    if start_bracket == -1 and start_brace == -1:
+        return raw
+
+    if start_bracket != -1 and (start_brace == -1 or start_bracket < start_brace):
+        start_idx = start_bracket
+        end_char = ']'
+    else:
+        start_idx = start_brace
+        end_char = '}'
+        
+    end_idx = raw.rfind(end_char)
+    if end_idx != -1:
+        raw = raw[start_idx:end_idx+1]
+        
+    # Remove trailing commas before closing brackets
+    raw = re.sub(r',\s*([\]}])', r'\1', raw)
+    
+    # Simple fix for unclosed strings at the very end (common if truncated)
+    if raw.count('"') % 2 != 0 and raw.endswith(end_char):
+        # This is a bit risky but can help if it ends like "key": "value... } or ]
+        # We find the last open quote and try to close it before the end_char
+        last_quote = raw.rfind('"')
+        if last_quote != -1:
+            raw = raw[:last_quote] + '"' + raw[last_quote:]
+            
+    # Fix for missing closing brackets if truncated
+    if end_char == ']' and raw.count('[') > raw.count(']'):
+        raw += ']' * (raw.count('[') - raw.count(']'))
+    elif end_char == '}' and raw.count('{') > raw.count('}'):
+        raw += '}' * (raw.count('{') - raw.count('}'))
+        
+    return raw
+
+
 @functools.lru_cache(maxsize=100)
 def _cached_read_json(path_str: str, modified_time: float) -> dict:
     try:

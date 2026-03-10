@@ -342,12 +342,9 @@ def run_feature_case_generator(
     plan_data = build_execution_plan(parsed_data, page_model, url, site_profile=project_info.get("site_profile", {}))
     
     # Self-critique the plan for higher reliability
-    refined_plan_data = refine_execution_plan_with_self_critique(
-        url=url,
-        page_model=page_model,
-        page_scope=page_scope,
+    refined_plan_data, self_critique_report = refine_execution_plan_with_self_critique(
         execution_plan=plan_data,
-        instruction=instruction
+        page_model=page_model
     )
     
     plan_path = save_json_artifact(
