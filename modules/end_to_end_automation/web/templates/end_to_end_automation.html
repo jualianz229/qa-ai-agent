@@ -217,18 +217,26 @@ Example:
           ? [...logLines].reverse().find((line) => /error|failed|traceback/i.test(String(line || "")))
           : "";
         const card = document.createElement("article");
-        card.className = `job-card job-${String(job.status || "")}`;
+        card.className = `job-card job-${statusValue}`;
         card.innerHTML = `
-          <header><strong>${String(job.payload?.url || "-")}</strong>${!isRunning ? `<span class="status-indicator status-${statusValue}">${statusValue}</span>` : ""}</header>
+          <header>
+            <div class="job-id-group">
+                <strong>${String(job.payload?.url || "-")}</strong>
+                ${isRunning ? `
+                <div class="ai-thinking-group">
+                  <span class="spinner"></span>
+                  <span>Running</span>
+                </div>` : ""}
+            </div>
+            <div class="job-header-actions">
+              ${isRunning ? `<button class="inline-mini-button danger" type="button" data-cancel-job="${job.id}">Cancel</button>` : ""}
+              ${!isRunning ? `<span class="status-indicator status-${statusValue}">${statusValue}</span>` : ""}
+            </div>
+          </header>
           <div class="job-meta">
             <span class="panel-badge">Source: ${sourceLabel}</span>
             <span class="panel-badge">Started: ${createdAt}</span>
             <span class="panel-badge">Duration: ${duration}</span>
-          </div>
-          <div class="job-command-viewer mono">${(job.command || []).join(" ")}</div>
-          <div class="job-actions">
-            ${runName ? `<a class="inline-link" href="/runs/${encodeURIComponent(runName)}">Open run ${runName}</a>` : ""}
-            ${runName ? `<button class="inline-mini-button" type="button" data-copy-run-link="/runs/${encodeURIComponent(runName)}">Copy run link</button>` : ""}
           </div>
           ${lastErrorLine ? `<p class="job-error-summary">${String(lastErrorLine)}</p>` : ""}
           ${hasSteps ? `<div class="job-steps-list">${section.stepsHtml}</div>` : ""}

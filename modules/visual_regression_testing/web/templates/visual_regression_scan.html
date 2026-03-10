@@ -155,7 +155,7 @@ endblock %}
         card.className = `job-card job-${statusValue}`;
         card.innerHTML = `
           <header>
-            <div class="job-header-main">
+            <div class="job-id-group">
                 <strong>${String(job.payload?.url || "-")}</strong>
                 ${isRunning ? `
                 <div class="ai-thinking-group">

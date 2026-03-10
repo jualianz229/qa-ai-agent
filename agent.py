@@ -431,13 +431,13 @@ def run_feature_visual_regression(*, url: str, use_auth: bool, run_name: str | N
         url = "https://" + url
     site_profile = load_site_profile(url)
     console.print(Rule(f"[bold]Visual Regression: {url}[/bold]"))
-    _job_step(1, "Capture visual snapshot")
+    _job_step(1, "Capture Visual Snapshot")
     with console.status("[bold yellow]Capturing visual snapshot...[/bold yellow]", spinner="line"):
         project_info, page_info, _ = runner.scan_website(
             url, use_auth, crawl_limit=1, site_profile=site_profile, run_name=run_name
         )
     _job_step(1, "done")
-    _job_step(2, "Save baseline and diff")
+    _job_step(2, "Save Baseline and Artifacts")
     runner.save_raw_scan(page_info, project_info)
     baseline_path, diff_path = runner.save_visual_regression_artifacts(page_info, project_info)
     _job_step(2, "done")
