@@ -85,18 +85,7 @@
       "module": "authentication",
       "category": "Login",
       "test_type": "Positive",
-      "automation_counts": {
-        "auto": 38
-      },
-      "step_profiles": {
-        "open_url > fill > fill > click": 36,
-        "open_url > fill > fill > inspect": 1,
-        "open_url > fill > fill": 1
-      },
-      "expected_profiles": {
-        "url_change": 34,
-        "generic": 4
-      },
+      "hits": 38,
       "example_titles": [
         "Successful Login with valid credentials",
         "Successful Login with 'performance_glitch_user'",
@@ -119,7 +108,18 @@
         "frm_008::authentication::successful_login_performance_glitch_user",
         "frm_015::authentication::successful_login_standard_user_password_case_sensitivity"
       ],
-      "hits": 38,
+      "automation_counts": {
+        "auto": 38
+      },
+      "step_profiles": {
+        "open_url > fill > fill > click": 36,
+        "open_url > fill > fill > inspect": 1,
+        "open_url > fill > fill": 1
+      },
+      "expected_profiles": {
+        "url_change": 34,
+        "generic": 4
+      },
       "last_used_at": "2026-03-06T23:12:45"
     },
     "authentication_form::authentication::negative": {
@@ -128,19 +128,7 @@
       "module": "authentication",
       "category": "Login",
       "test_type": "Negative",
-      "automation_counts": {
-        "auto": 66
-      },
-      "step_profiles": {
-        "open_url > fill > fill > click": 63,
-        "open_url > inspect > fill > click": 1,
-        "open_url > fill > inspect > click": 1,
-        "open_url > inspect > inspect > click": 1
-      },
-      "expected_profiles": {
-        "text_visible": 60,
-        "generic": 6
-      },
+      "hits": 66,
       "example_titles": [
         "Login with special characters in password",
         "Login with special characters in username",
@@ -163,7 +151,19 @@
         "frm_003::authentication::login_with_valid_username_and_invalid_password",
         "frm_011::authentication::login_with_invalid_username"
       ],
-      "hits": 66,
+      "automation_counts": {
+        "auto": 66
+      },
+      "step_profiles": {
+        "open_url > fill > fill > click": 63,
+        "open_url > inspect > fill > click": 1,
+        "open_url > fill > inspect > click": 1,
+        "open_url > inspect > inspect > click": 1
+      },
+      "expected_profiles": {
+        "text_visible": 60,
+        "generic": 6
+      },
       "last_used_at": "2026-03-06T23:12:45"
     },
     "authentication_form::form_validation::negative": {
@@ -172,23 +172,7 @@
       "module": "form_validation",
       "category": "Login",
       "test_type": "Negative",
-      "automation_counts": {
-        "auto": 124
-      },
-      "step_profiles": {
-        "open_url > inspect > fill > click": 15,
-        "open_url > fill > inspect > click": 15,
-        "open_url > fill > fill > click": 81,
-        "open_url > inspect > inspect > click": 5,
-        "open_url > fill > fill > inspect > click": 1,
-        "open_url > fill > inspect > fill > click": 1,
-        "open_url > inspect > fill": 3,
-        "open_url > fill > inspect": 3
-      },
-      "expected_profiles": {
-        "text_visible": 116,
-        "generic": 8
-      },
+      "hits": 124,
       "example_titles": [
         "Verify Login button is disabled when password is empty",
         "Verify Login button is disabled when username is empty",
@@ -211,7 +195,23 @@
         "frm_005::form_validation::login_with_empty_password",
         "frm_008::form_validation::password_field_maximum_length"
       ],
-      "hits": 124,
+      "automation_counts": {
+        "auto": 124
+      },
+      "step_profiles": {
+        "open_url > inspect > fill > click": 15,
+        "open_url > fill > inspect > click": 15,
+        "open_url > fill > fill > click": 81,
+        "open_url > inspect > inspect > click": 5,
+        "open_url > fill > fill > inspect > click": 1,
+        "open_url > fill > inspect > fill > click": 1,
+        "open_url > inspect > fill": 3,
+        "open_url > fill > inspect": 3
+      },
+      "expected_profiles": {
+        "text_visible": 116,
+        "generic": 8
+      },
       "last_used_at": "2026-03-06T23:12:45"
     },
     "authentication_form::form_validation::positive": {
@@ -220,6 +220,15 @@
       "module": "form_validation",
       "category": "Login",
       "test_type": "Positive",
+      "hits": 5,
+      "example_titles": [
+        "Verify Login button is enabled when both fields are populated"
+      ],
+      "signatures": [
+        "frm_010::form_validation::verify_login_button_is_enabled_when_both_fields_are_populated",
+        "frm_012::form_validation::verify_login_button_is_enabled_when_both_fields_are_populated",
+        "frm_016::form_validation::verify_login_button_is_enabled_when_both_fields_are_populated"
+      ],
       "automation_counts": {
         "auto": 5
       },
@@ -230,17 +239,126 @@
       "expected_profiles": {
         "generic": 5
       },
+      "last_used_at": "2026-03-06T23:12:45"
+    },
+    "contact_form::search::positive": {
+      "pattern_key": "contact_form::search::positive",
+      "page_type": "contact_form",
+      "module": "Search",
+      "category": "Functional",
+      "test_type": "Positive",
+      "automation_counts": {
+        "auto": 1
+      },
+      "step_profiles": {
+        "open_url > fill > click": 1
+      },
+      "expected_profiles": {
+        "text_visible": 1
+      },
       "example_titles": [
-        "Verify Login button is enabled when both fields are populated"
+        "Use 'Search' to retrieve relevant results"
       ],
       "signatures": [
-        "frm_010::form_validation::verify_login_button_is_enabled_when_both_fields_are_populated",
-        "frm_012::form_validation::verify_login_button_is_enabled_when_both_fields_are_populated",
-        "frm_016::form_validation::verify_login_button_is_enabled_when_both_fields_are_populated"
+        "sea_001::search::use_search_to_retrieve_relevant_results"
       ],
-      "hits": 5,
-      "last_used_at": "2026-03-06T23:12:45"
+      "hits": 1,
+      "last_used_at": "2026-03-10T12:04:27"
+    },
+    "contact_form::search::negative": {
+      "pattern_key": "contact_form::search::negative",
+      "page_type": "contact_form",
+      "module": "Search",
+      "category": "Functional",
+      "test_type": "Negative",
+      "automation_counts": {
+        "auto": 1
+      },
+      "step_profiles": {
+        "open_url > fill > click": 1
+      },
+      "expected_profiles": {
+        "generic": 1
+      },
+      "example_titles": [
+        "Submit 'Search' with an empty keyword"
+      ],
+      "signatures": [
+        "sea_002::search::submit_search_with_an_empty_keyword"
+      ],
+      "hits": 1,
+      "last_used_at": "2026-03-10T12:04:27"
+    },
+    "contact_form::form_validation::positive": {
+      "pattern_key": "contact_form::form_validation::positive",
+      "page_type": "contact_form",
+      "module": "form_validation",
+      "category": "Functional",
+      "test_type": "Positive",
+      "automation_counts": {
+        "auto": 7
+      },
+      "step_profiles": {
+        "open_url > fill > inspect": 7
+      },
+      "expected_profiles": {
+        "generic": 7
+      },
+      "example_titles": [
+        "Validate stable interaction on 'g-recaptcha-response'",
+        "Validate stable interaction on 'Pusat Preferensi Privasi'",
+        "Validate stable interaction on 'Home Hubungi Kami'",
+        "Validate stable interaction on 'Message'",
+        "Validate stable interaction on 'Email'",
+        "Validate stable interaction on 'First Name'"
+      ],
+      "signatures": [
+        "for_017::form_validation::validate_stable_interaction_on_g_recaptcha_response",
+        "for_015::form_validation::validate_stable_interaction_on_pusat_preferensi_privasi",
+        "for_013::form_validation::validate_stable_interaction_on_home_hubungi_kami",
+        "for_009::form_validation::validate_stable_interaction_on_message",
+        "for_007::form_validation::validate_stable_interaction_on_email",
+        "for_005::form_validation::validate_stable_interaction_on_first_name",
+        "for_003::form_validation::validate_stable_interaction_on_search"
+      ],
+      "hits": 7,
+      "last_used_at": "2026-03-10T12:04:27"
+    },
+    "contact_form::form_validation::negative": {
+      "pattern_key": "contact_form::form_validation::negative",
+      "page_type": "contact_form",
+      "module": "form_validation",
+      "category": "Functional",
+      "test_type": "Negative",
+      "automation_counts": {
+        "auto": 7
+      },
+      "step_profiles": {
+        "open_url > fill > inspect": 7
+      },
+      "expected_profiles": {
+        "generic": 7
+      },
+      "example_titles": [
+        "Validate invalid or empty input handling on 'Rincian Cookies‎'",
+        "Validate invalid or empty input handling on 'Pusat Preferensi Privasi'",
+        "Validate invalid or empty input handling on 'Username'",
+        "Validate invalid or empty input handling on 'Message'",
+        "Validate invalid or empty input handling on 'Phone Number'",
+        "Validate invalid or empty input handling on 'Last Name'"
+      ],
+      "signatures": [
+        "for_016::form_validation::validate_invalid_or_empty_input_handling_on_rincian_cookies",
+        "for_014::form_validation::validate_invalid_or_empty_input_handling_on_pusat_preferensi_privasi",
+        "for_012::form_validation::validate_invalid_or_empty_input_handling_on_username",
+        "for_010::form_validation::validate_invalid_or_empty_input_handling_on_message",
+        "for_008::form_validation::validate_invalid_or_empty_input_handling_on_phone_number",
+        "for_006::form_validation::validate_invalid_or_empty_input_handling_on_last_name",
+        "for_004::form_validation::validate_invalid_or_empty_input_handling_on_email"
+      ],
+      "hits": 7,
+      "last_used_at": "2026-03-10T12:04:27"
     }
   },
-  "updated_at": "2026-03-06T23:12:45"
+  "updated_at": "2026-03-10T12:04:27"
 }

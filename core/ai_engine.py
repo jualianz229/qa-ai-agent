@@ -364,7 +364,7 @@ class AIEngine:
                     scenario_volume["min_valid_count"] = max(6, int(scenario_volume["target_count"] * 0.4))
                 
                 if attempt == max_attempts - 1:
-                    raise ValueError(f"Failed to parse AI output as JSON: {e}\nRaw Output Snippet: {raw[:300]}...")
+                    return []
                 correction_notes = [f"Return strict JSON only. Parsing failed: {e}. Try generating fewer scenarios if output size is an issue."]
                 continue
 
