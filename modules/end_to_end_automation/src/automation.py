@@ -70,6 +70,7 @@ def create_automation_job(
 def run_automation_job(job_id: str, payload: dict) -> None:
     try:
         update_job(job_id, status="running")
+        append_job_log(job_id, "[STEP] 1 | Prepare automation plan")
         prepared = prepare_automation_run(
             payload["source_run_name"],
             payload["automation_run_name"],
@@ -77,21 +78,33 @@ def run_automation_job(job_id: str, payload: dict) -> None:
             payload.get("executor_headed", False),
             payload.get("inject_login", ""),
         )
+        append_job_log(job_id, "[STEP] 1 | done")
         append_job_log(job_id, f"Prepared automation run: {prepared['run_name']}")
         append_job_log(job_id, f"Selected cases: {len(prepared['selected_ids'])}")
+        
         if prepared.get("inject_login"):
             append_job_log(job_id, "Inject login instructions attached to this automation run.")
+            
+        append_job_log(job_id, "[STEP] 2 | Run Playwright test cases")
         command = [sys.executable, prepared["script_path"].name]
         update_job(job_id, command=command, run_name=prepared["run_name"])
         exit_code = run_logged_process(job_id, command, str(prepared["script_path"].parent))
+        append_job_log(job_id, "[STEP] 2 | " + ("done" if exit_code == 0 else "fail"))
+
+        append_job_log(job_id, "[STEP] 3 | Gather results & save artifacts")
         if exit_code == 0 and prepared["results_path"].exists():
             summary = analyze_execution_results(prepared["results_path"])
             save_execution_summary(prepared["results_path"], summary)
             csv_runner = Scanner(RESULT_DIR)
             csv_runner.update_csv_with_execution_results(prepared["csv_path"], prepared["results_path"], ",")
+            append_job_log(job_id, "[STEP] 3 | done")
+        elif exit_code != 0:
+            append_job_log(job_id, "[STEP] 3 | fail")
+
         status = "completed" if exit_code == 0 else "failed"
         update_job(job_id, status=status, exit_code=exit_code)
     except Exception as exc:
+        append_job_log(job_id, "[STEP] 1 | fail")
         append_job_log(job_id, f"Automation test error: {exc}")
         update_job(job_id, status="failed", exit_code=1)
 
