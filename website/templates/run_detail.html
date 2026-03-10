@@ -66,7 +66,7 @@ endif %}{% endblock %}
 {% endif %}
 
 <div class="dashboard-grid">
-  <section class="dashboard-section card execution-cases-section" style="grid-column: span 2;">
+  <section class="dashboard-section card execution-cases-section" style="grid-column: 1 / -1;">
     <div class="section-header section-header-with-actions">
       <h3><span class="icon">📋</span> Execution Cases</h3>
       <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -173,9 +173,6 @@ endif %}{% endblock %}
   </section>
   {% endif %}
   <p id="run-detail-save-status" class="run-detail-save-status" role="status" aria-live="polite"></p>
-  <p class="run-detail-feedback-cta">
-    <a href="{{ url_for('improve_ai_page') }}">Beri feedback → Improve AI</a>
-  </p>
 </div>
 
 <script>

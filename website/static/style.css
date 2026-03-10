@@ -848,9 +848,9 @@ select.cell-select:focus {
 }
 
 .table-shell-resizable {
-  min-height: 280px;
-  height: 60vh;
-  max-height: 80vh;
+  min-height: 480px;
+  height: 75vh;
+  max-height: 90vh;
   overflow-x: auto;
   overflow-y: auto;
 }

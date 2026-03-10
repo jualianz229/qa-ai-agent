@@ -1,0 +1,123 @@
+{
+  "patterns": {
+    "contact_form::search::positive": {
+      "pattern_key": "contact_form::search::positive",
+      "page_type": "contact_form",
+      "module": "Search",
+      "category": "Functional",
+      "test_type": "Positive",
+      "automation_counts": {
+        "auto": 2
+      },
+      "step_profiles": {
+        "open_url > fill > click": 2
+      },
+      "expected_profiles": {
+        "text_visible": 2
+      },
+      "example_titles": [
+        "Use 'Search' to retrieve relevant results"
+      ],
+      "signatures": [
+        "sea_001::search::use_search_to_retrieve_relevant_results"
+      ],
+      "hits": 2,
+      "last_used_at": "2026-03-10T13:15:23"
+    },
+    "contact_form::search::negative": {
+      "pattern_key": "contact_form::search::negative",
+      "page_type": "contact_form",
+      "module": "Search",
+      "category": "Functional",
+      "test_type": "Negative",
+      "automation_counts": {
+        "auto": 2
+      },
+      "step_profiles": {
+        "open_url > fill > click": 2
+      },
+      "expected_profiles": {
+        "generic": 2
+      },
+      "example_titles": [
+        "Submit 'Search' with an empty keyword"
+      ],
+      "signatures": [
+        "sea_002::search::submit_search_with_an_empty_keyword"
+      ],
+      "hits": 2,
+      "last_used_at": "2026-03-10T13:15:23"
+    },
+    "contact_form::form_validation::positive": {
+      "pattern_key": "contact_form::form_validation::positive",
+      "page_type": "contact_form",
+      "module": "form_validation",
+      "category": "Functional",
+      "test_type": "Positive",
+      "automation_counts": {
+        "auto": 14
+      },
+      "step_profiles": {
+        "open_url > fill > inspect": 14
+      },
+      "expected_profiles": {
+        "generic": 14
+      },
+      "example_titles": [
+        "Validate stable interaction on 'g-recaptcha-response'",
+        "Validate stable interaction on 'Pusat Preferensi Privasi'",
+        "Validate stable interaction on 'Home Hubungi Kami'",
+        "Validate stable interaction on 'Message'",
+        "Validate stable interaction on 'Email'",
+        "Validate stable interaction on 'First Name'"
+      ],
+      "signatures": [
+        "for_017::form_validation::validate_stable_interaction_on_g_recaptcha_response",
+        "for_015::form_validation::validate_stable_interaction_on_pusat_preferensi_privasi",
+        "for_013::form_validation::validate_stable_interaction_on_home_hubungi_kami",
+        "for_009::form_validation::validate_stable_interaction_on_message",
+        "for_007::form_validation::validate_stable_interaction_on_email",
+        "for_005::form_validation::validate_stable_interaction_on_first_name",
+        "for_003::form_validation::validate_stable_interaction_on_search"
+      ],
+      "hits": 14,
+      "last_used_at": "2026-03-10T13:15:23"
+    },
+    "contact_form::form_validation::negative": {
+      "pattern_key": "contact_form::form_validation::negative",
+      "page_type": "contact_form",
+      "module": "form_validation",
+      "category": "Functional",
+      "test_type": "Negative",
+      "automation_counts": {
+        "auto": 14
+      },
+      "step_profiles": {
+        "open_url > fill > inspect": 14
+      },
+      "expected_profiles": {
+        "generic": 14
+      },
+      "example_titles": [
+        "Validate invalid or empty input handling on 'Rincian Cookies‎'",
+        "Validate invalid or empty input handling on 'Pusat Preferensi Privasi'",
+        "Validate invalid or empty input handling on 'Username'",
+        "Validate invalid or empty input handling on 'Message'",
+        "Validate invalid or empty input handling on 'Phone Number'",
+        "Validate invalid or empty input handling on 'Last Name'"
+      ],
+      "signatures": [
+        "for_016::form_validation::validate_invalid_or_empty_input_handling_on_rincian_cookies",
+        "for_014::form_validation::validate_invalid_or_empty_input_handling_on_pusat_preferensi_privasi",
+        "for_012::form_validation::validate_invalid_or_empty_input_handling_on_username",
+        "for_010::form_validation::validate_invalid_or_empty_input_handling_on_message",
+        "for_008::form_validation::validate_invalid_or_empty_input_handling_on_phone_number",
+        "for_006::form_validation::validate_invalid_or_empty_input_handling_on_last_name",
+        "for_004::form_validation::validate_invalid_or_empty_input_handling_on_email"
+      ],
+      "hits": 14,
+      "last_used_at": "2026-03-10T13:15:23"
+    }
+  },
+  "updated_at": "2026-03-10T13:15:23"
+}
