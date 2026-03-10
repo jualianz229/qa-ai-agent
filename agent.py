@@ -356,9 +356,8 @@ def run_feature_case_generator(
     )
     
     validate_plan = validate_execution_plan(
-        plan=refined_plan_data,
+        execution_plan=refined_plan_data,
         page_model=page_model,
-        page_scope=page_scope,
         page_info=page_info,
     )
     save_json_artifact(validate_plan, json_artifact_path(project_info["run_dir"], f"Execution_Plan_Validation_{project_info['safe_name']}_{project_info['timestamp']}.json"))
