@@ -2,8 +2,7 @@
 {% block title %}Test Case Generator | TracePilot{% endblock %}
 {% block header_kicker %}Testing Flow{% endblock %}
 {% block header_title %}Test Case Generator{% endblock %}
-{% block header_subtitle %}Step 1: input a URL to generate as many context-grounded test cases as possible.{% endblock
-%}
+{% block header_subtitle %}Input a URL to generate as many context-grounded test cases as possible.{% endblock %}
 {% block content %}
 <section class="panel">
   <div class="panel-head">
@@ -13,7 +12,7 @@
     </div>
     <div class="panel-head-actions">
       <a href="{{ url_for('test_case_generator.scenario_results_page') }}" class="ghost-button">Generator Results</a>
-      <span class="panel-badge">Step 1</span>
+
     </div>
   </div>
   <div id="scenario-error-alert" class="inline-error-alert hidden-panel" role="alert" aria-live="assertive"></div>

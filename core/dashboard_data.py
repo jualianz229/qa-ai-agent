@@ -36,6 +36,47 @@ from core.utils import (
     is_automation_or_recovery_run
 )
 
+import threading
+import time
+
+
+_SUMMARY_CACHE: dict[tuple[str, float], dict] = {}
+_FILE_CONTENT_CACHE: dict[tuple[str, float], object] = {}
+_METRICS_CACHE: dict[str, object] = {"data": None, "timestamp": 0}
+_CACHE_LOCK = threading.RLock()
+
+
+def _load_json_if_exists(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime)
+        with _CACHE_LOCK:
+            if key in _FILE_CONTENT_CACHE:
+                return _FILE_CONTENT_CACHE[key]
+        
+        data = json.loads(path.read_text(encoding="utf-8"))
+        with _CACHE_LOCK:
+            _FILE_CONTENT_CACHE[key] = data
+        return data
+    except Exception:
+        return {}
+
+
+import functools
+
+# Previously this function scanned the entire results directory on every call.
+# For large collections of runs this can be slow during normal page navigation.  A
+# straight lru_cache helps a little but never invalidates automatically, so the
+# cache would stay stale until process restart.  We switch to a simple time‑based
+# cache with a short TTL and also keep a lightweight directory snapshot so that
+# navigation requests can return almost instantly.
+_list_runs_cache: dict = {"ts": 0.0, "data": None, "count": 0}
+
+# TTL in seconds for the directory cache.  A value of 3‑5 seconds is usually
+# plenty for interactive use; adjust if runs are added extremely frequently.
+_LIST_RUNS_TTL = 5.0
 
 def list_runs(results_dir: str | Path | None = None) -> list[dict]:
     from core.config import RESULT_DIR
@@ -44,16 +85,52 @@ def list_runs(results_dir: str | Path | None = None) -> list[dict]:
     root = Path(results_dir)
     if not root.exists():
         return []
-    runs = []
+
+    now = time.time()
+    # bail out early if the cache is fresh and the number of subdirs hasn't changed
+    try:
+        dir_count = sum(1 for _ in root.iterdir() if _.is_dir())
+    except OSError:
+        dir_count = 0
+
+    if (
+        _list_runs_cache["data"] is not None
+        and (now - _list_runs_cache["ts"]) < _LIST_RUNS_TTL
+        and dir_count == _list_runs_cache["count"]
+    ):
+        return _list_runs_cache["data"]
+
+    runs: list[dict] = []
     for run_dir in root.iterdir():
         if run_dir.is_dir():
             runs.append(build_run_summary(run_dir))
     runs.sort(key=lambda item: item.get("modified_ts", 0), reverse=True)
+
+    _list_runs_cache.update({"ts": now, "data": runs, "count": dir_count})
     return runs
 
 
 def build_run_summary(run_dir: str | Path) -> dict:
     run_path = Path(run_dir)
+    try:
+        st = run_path.stat()
+        mtime = st.st_mtime
+    except OSError:
+        return {}
+
+    cache_key = (run_path.name, mtime)
+    with _CACHE_LOCK:
+        if cache_key in _SUMMARY_CACHE:
+            return _SUMMARY_CACHE[cache_key]
+
+    summary = _build_run_summary_impl(run_path)
+    
+    with _CACHE_LOCK:
+        _SUMMARY_CACHE[cache_key] = summary
+    return summary
+
+
+def _build_run_summary_impl(run_path: Path) -> dict:
     json_dir = run_path / "JSON"
     raw_scan = _load_first_matching_json(json_dir, "raw_scan_*.json")
     page_scope = _load_first_matching_json(json_dir, "Page_Scope_*.json")
@@ -662,11 +739,11 @@ def build_benchmark_snapshot(results_dir: str | Path | None = None, limit: int =
     }
 
 
-def build_triage_inbox(results_dir: str | Path | None = None, limit: int = 12) -> dict:
+def build_triage_inbox(results_dir: str | Path | None = None, limit: int = 12, runs: list[dict] | None = None) -> dict:
     from core.config import RESULT_DIR
     if results_dir is None:
         results_dir = RESULT_DIR
-    rows = list_runs(results_dir)
+    rows = runs if runs is not None else list_runs(results_dir)
     candidates = [
         item
         for item in rows
@@ -719,11 +796,11 @@ def build_triage_inbox(results_dir: str | Path | None = None, limit: int = 12) -
     }
 
 
-def build_ai_safety_audit(results_dir: str | Path | None = None, limit: int = 30) -> dict:
+def build_ai_safety_audit(results_dir: str | Path | None = None, limit: int = 30, runs: list[dict] | None = None) -> dict:
     from core.config import RESULT_DIR
     if results_dir is None:
         results_dir = RESULT_DIR
-    rows = list_runs(results_dir)[: max(1, int(limit or 1))]
+    rows = (runs if runs is not None else list_runs(results_dir))[:max(1, int(limit or 1))]
     if not rows:
         return {
             "total_runs": 0,
@@ -1398,9 +1475,26 @@ def _load_first_matching_json(directory: Path, pattern: str) -> dict:
     return json.loads(file_path.read_text(encoding="utf-8"))
 
 
+def _read_csv_rows_cached(csv_path: Path) -> list[dict]:
+    try:
+        st = csv_path.stat()
+        key = (str(csv_path), st.st_mtime, "csv")
+        with _CACHE_LOCK:
+            if key in _FILE_CONTENT_CACHE:
+                return _FILE_CONTENT_CACHE[key]
+        
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            data = list(csv.DictReader(handle))
+            
+        with _CACHE_LOCK:
+            _FILE_CONTENT_CACHE[key] = data
+        return data
+    except Exception:
+        return []
+
+
 def _read_csv_rows(csv_path: Path) -> list[dict]:
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        return list(csv.DictReader(handle))
+    return _read_csv_rows_cached(csv_path)
 
 
 # Canonical CSV column names for Run Detail / UI. Alternate headers (e.g. Excel export, AI output) map to these.
@@ -1772,10 +1866,11 @@ def _get_recovery_actions(run_name: str, limit: int = 20) -> list[dict]:
     return actions[-max(1, int(limit or 1)):]
 
 
-def _collect_recovery_audit_rows(limit_per_run: int = 40) -> list[dict]:
+def _collect_recovery_audit_rows(limit_per_run: int = 40, runs: list[dict] | None = None) -> list[dict]:
     from core.config import RESULT_DIR
     rows = []
-    for run in list_runs(RESULT_DIR):
+    run_list = runs if runs is not None else list_runs(RESULT_DIR)
+    for run in run_list:
         run_name = str(run.get("run_name", "")).strip()
         if not run_name:
             continue
@@ -1800,9 +1895,9 @@ def _collect_recovery_audit_rows(limit_per_run: int = 40) -> list[dict]:
     return rows
 
 
-def _recovery_metrics_snapshot(limit_per_run: int = 60) -> dict:
+def _recovery_metrics_snapshot(limit_per_run: int = 60, runs: list[dict] | None = None) -> dict:
     from core.jobs import get_all_jobs
-    rows = _collect_recovery_audit_rows(limit_per_run=limit_per_run)
+    rows = _collect_recovery_audit_rows(limit_per_run=limit_per_run, runs=runs)
     strategy_counts = {
         "safe_rerun": {"completed": 0, "failed": 0, "canceled": 0},
         "retry_failed": {"completed": 0, "failed": 0, "canceled": 0},
@@ -1857,13 +1952,31 @@ def _recovery_metrics_snapshot(limit_per_run: int = 60) -> dict:
 
 
 def dashboard_metrics() -> dict:
+    # metrics are moderately expensive to compute; we keep them cached for a
+    # short interval so that clicking between pages or opening the sidebar doesn't
+    # recompute everything on each request.  The TTL here is configurable but
+    # defaults to 5 seconds which is more than adequate for human interaction.
+    with _CACHE_LOCK:
+        now = time.time()
+        if _METRICS_CACHE["data"] is not None and (now - _METRICS_CACHE["timestamp"]) < 5.0:
+            return _METRICS_CACHE["data"]
+    
+    data = _dashboard_metrics_impl()
+    
+    with _CACHE_LOCK:
+        _METRICS_CACHE["data"] = data
+        _METRICS_CACHE["timestamp"] = time.time()
+    return data
+
+
+def _dashboard_metrics_impl() -> dict:
     from core.config import RESULT_DIR
     runs = list_runs(RESULT_DIR)
     scenario_runs = [item for item in runs if not is_automation_or_recovery_run(item.get("run_name", ""))]
     automation_runs = [item for item in runs if is_automation_run(item.get("run_name", ""))]
-    recovery_metrics = _recovery_metrics_snapshot(limit_per_run=50)
-    triage_snapshot = build_triage_inbox(RESULT_DIR, limit=20)
-    safety_audit = build_ai_safety_audit(RESULT_DIR, limit=30)
+    recovery_metrics = _recovery_metrics_snapshot(limit_per_run=50, runs=runs)
+    triage_snapshot = build_triage_inbox(RESULT_DIR, limit=20, runs=runs)
+    safety_audit = build_ai_safety_audit(RESULT_DIR, limit=30, runs=runs)
     safety_values = [int(item.get("safety_index", 0) or 0) for item in runs]
     blocked_runs = sum(1 for item in runs if bool(item.get("execution_gate", {}).get("blocked", False)))
     policy_failures = sum(1 for item in runs if not bool(item.get("policy_pack_report", {}).get("success", True)))

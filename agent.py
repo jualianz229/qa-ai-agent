@@ -363,6 +363,14 @@ def run_feature_case_generator(
     save_json_artifact(validate_plan, json_artifact_path(project_info["run_dir"], f"Execution_Plan_Validation_{project_info['safe_name']}_{project_info['timestamp']}.json"))
     
     console.print(f"  [green][OK][/green] Execution plan built: [dim]{plan_path}[/dim]")
+
+    # generate playwright script by default for improved UX
+    _job_step(6, "Membangun Executor Script (Playwright)")
+    executor = CodeGenerator(None)
+    pom_script = executor.generate_pom_script(project_info, Path(plan_path), headless=True)
+    if pom_script:
+        console.print(f"  [green][OK][/green] E2E Script generated: [dim]{pom_script}[/dim]")
+    _job_step(6, "done")
     
     _job_step(5, "done")
 

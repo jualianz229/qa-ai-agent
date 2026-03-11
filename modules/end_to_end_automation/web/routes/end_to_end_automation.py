@@ -1,7 +1,5 @@
-"""End-to-End Automation – routes blueprint."""
-from __future__ import annotations
-
-from flask import Blueprint, jsonify, render_template, request, url_for
+from flask import Blueprint, jsonify, render_template, request, url_for, send_file, abort
+from io import BytesIO
 
 from core.config import RESULT_DIR
 from core.dashboard_data import build_run_detail, list_runs, sort_runs
@@ -19,7 +17,8 @@ from modules.end_to_end_automation.src.recovery import (
     safe_rerun_eligibility,
     build_safe_rerun_instruction,
 )
-from modules.end_to_end_automation.src.automation import create_automation_job
+from modules.end_to_end_automation.src.automation import create_automation_job  # legacy wrapper; kept for other callers
+from modules.end_to_end_automation.src import e2e
 from modules.end_to_end_automation.web.features.end_to_end_automation import (
     build_automation_results_context,
     build_end_to_end_automation_context,
@@ -75,58 +74,120 @@ def automation_results_page():
 # API routes
 # ---------------------------------------------------------------------------
 
+@bp.get("/api/automation/example-format")
+def download_example_format_api():
+    """Download a specimen CSV file for the E2E automation tool."""
+    output = BytesIO()
+    # standard format for automation: ID and Title are core
+    content = "ID,Title,Precondition,Steps to Reproduce,Expected Result,Priority,Severity\n"
+    content += "TC-001,Successful Login,The Swag Labs login page is displayed.,\"1. Open site\n2. Enter username\n3. Click Login\",User is successfully logged in.,P1,Critical\n"
+    content += "TC-002,Login with Invalid Password,The login page is displayed.,\"1. Open site\n2. Enter incorrect password\n3. Click Login\",Error message is displayed.,P2,Major\n"
+    output.write(content.encode('utf-8-sig'))
+    output.seek(0)
+    return send_file(
+        output,
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name="automation_example_format.csv"
+    )
+
 @bp.post("/api/automation-jobs")
 def create_automation_job_api():
-    from website.dashboard import _resolve_run_dir
-    source_run_name = request.form.get("source_run_name", "").strip()
-    case_mode = request.form.get("case_mode", "all").strip().lower()
-    inject_login = request.form.get("inject_login", "").strip()
-    selected_case_ids = []
-    if case_mode == "custom":
-        selected_case_ids = [
-            item.strip()
-            for item in str(request.form.get("case_ids", "")).replace("\n", ",").split(",")
-            if item.strip()
-        ]
-    elif case_mode == "selected":
-        selected_case_ids = [item.strip() for item in request.form.getlist("selected_case_ids[]") if item.strip()]
-        if not selected_case_ids:
-            fallback_ids = str(request.form.get("case_ids", "")).replace("\n", ",").split(",")
-            selected_case_ids = [item.strip() for item in fallback_ids if item.strip()]
-        if not selected_case_ids:
-            return jsonify({"ok": False, "error": "Select at least 1 scenario case for selected mode."}), 400
-    elif case_mode == "failed":
-        try:
-            detail = build_run_detail(_resolve_run_dir(source_run_name))
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        selected_case_ids = [row["id"] for row in detail.get("case_rows", []) if row.get("status") == "failed"]
-        if not selected_case_ids:
-            return jsonify({"ok": False, "error": "This run has no failed cases for failed-only mode."}), 400
+    """Unified entrypoint for creating E2E automation jobs.
 
+    The form now offers two mutually exclusive sources:
+
+    * ``source_run_name`` + ``case_mode``/``selected_case_ids`` – pick an
+      existing run and optionally filter the cases.
+    * ``cases_file`` – upload a CSV or JSON file containing the cases.  When a
+      file is present the run selection is ignored.
+
+    The payload dictionary is built accordingly and then passed to the shared
+    ``create_automation_job`` helper (which delegates to the new
+    ``e2e.create_e2e_job``).
+    """
+    from website.dashboard import _resolve_run_dir
+
+    source_run_name = request.form.get("source_run_name", "").strip()
+    inject_login = request.form.get("inject_login", "").strip()
     executor_headed = form_bool(request.form.get("executor_headed"), default=False)
-    duplicate_payload = {
-        "mode": "automation_test",
-        "url": "",
-        "source_run_name": source_run_name,
-        "case_mode": case_mode,
-        "selected_case_ids": selected_case_ids,
-    }
-    is_duplicate, duplicate_error = is_duplicate_recent_job(duplicate_payload, cooldown_seconds=10)
+
+    # source mode: either file upload, manual JSON text, or existing run
+    cases_file = request.files.get("cases_file")
+    cases_json_text = request.form.get("cases_json")
+
+    if cases_file and cases_file.filename:
+        # blob mode; read and classify by extension or JSON parse
+        content = cases_file.read().decode("utf-8", errors="ignore")
+        try:
+            parsed = json.loads(content)
+            payload = {"cases": parsed}
+        except Exception:
+            payload = {"csv": content}
+        payload.update({"executor_headed": executor_headed, "inject_login": inject_login})
+    elif cases_json_text:
+        # manual JSON text mode
+        try:
+            parsed = json.loads(cases_json_text)
+            payload = {"cases": parsed}
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"Invalid JSON payload: {exc}"}), 400
+        payload.update({"executor_headed": executor_headed, "inject_login": inject_login})
+    else:
+        # existing-run mode
+        case_mode = request.form.get("case_mode", "all").strip().lower()
+        selected_case_ids: list[str] = []
+        if case_mode == "custom":
+            selected_case_ids = [
+                item.strip()
+                for item in str(request.form.get("case_ids", "")).replace("\n", ",").split(",")
+                if item.strip()
+            ]
+        elif case_mode == "selected":
+            selected_case_ids = [item.strip() for item in request.form.getlist("selected_case_ids[]") if item.strip()]
+            if not selected_case_ids:
+                fallback_ids = str(request.form.get("case_ids", "")).replace("\n", ",").split(",")
+                selected_case_ids = [item.strip() for item in fallback_ids if item.strip()]
+            if not selected_case_ids:
+                return jsonify({"ok": False, "error": "Select at least 1 scenario case for selected mode."}), 400
+        elif case_mode == "failed":
+            try:
+                detail = build_run_detail(_resolve_run_dir(source_run_name))
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+            selected_case_ids = [row["id"] for row in detail.get("case_rows", []) if row.get("status") == "failed"]
+            if not selected_case_ids:
+                return jsonify({"ok": False, "error": "This run has no failed cases for failed-only mode."}), 400
+
+        payload = {
+            "source_run_name": source_run_name,
+            "selected_case_ids": selected_case_ids,
+            "executor_headed": executor_headed,
+            "inject_login": inject_login,
+        }
+
+    # duplicate detection stays the same
+    is_duplicate, duplicate_error = is_duplicate_recent_job(payload, cooldown_seconds=10)
     if is_duplicate:
         return jsonify({"ok": False, "error": duplicate_error}), 409
+
     try:
-        job = create_automation_job(
-            source_run_name,
-            selected_case_ids=selected_case_ids,
-            executor_headed=executor_headed,
-            inject_login=inject_login,
-        )
+        # direct call to the new e2e helper avoids accidentally passing the
+        # entire payload dict as a positional argument (see issue with the
+        # compatibility wrapper).  most callers still use the wrapper, but the
+        # API route is free to work with the dict itself.
+        job = e2e.create_e2e_job(payload)
     except FileNotFoundError:
         return jsonify({"ok": False, "error": "Source run not found."}), 404
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
-    return jsonify({"ok": True, "job": job, "redirect": url_for("run_detail", run_name=job["run_name"])})
+
+    response = {"ok": True, "job": job}
+    try:
+        response["redirect"] = url_for("run_detail", run_name=job["run_name"])
+    except Exception:
+        pass
+    return jsonify(response)
 
 
 @bp.post("/api/runs/<run_name>/retry-failed")
@@ -163,6 +224,15 @@ def safe_rerun_job_api(run_name: str):
         {"action": "safe_rerun", "status": "queued", "job_id": job.get("id", ""), "target_run": job.get("run_name", "")},
     )
     return jsonify({"ok": True, "job": job, "redirect": url_for("home")})
+
+
+@bp.get("/api/runs/<run_name>/download-script")
+def download_script_api(run_name: str):
+    try:
+        script_path = e2e.download_script(run_name)
+    except FileNotFoundError:
+        abort(404)
+    return send_file(script_path, as_attachment=True, download_name=script_path.name)
 
 
 @bp.post("/api/runs/<run_name>/recover")

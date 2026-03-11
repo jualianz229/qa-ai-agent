@@ -39,6 +39,7 @@
           <th>Videos</th>
           <th>Confidence</th>
           <th>Safety</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -71,6 +72,12 @@
               class="badge {% if run.get('safety_status') == 'critical' %}badge-failed{% elif run.get('safety_status') == 'warning' %}badge-skipped{% else %}badge-passed{% endif %}">
               {{ run.get('safety_index', 0) }}/100
             </span>
+          </td>
+          <td>
+            <div class="action-cell">
+              <a class="inline-mini-button" href="{{ url_for('run_detail', run_name=run.get('run_name', '')) }}">Details</a>
+              <a class="inline-mini-button ghost" href="{{ url_for('end_to_end_automation.download_script_api', run_name=run.get('run_name', '')) }}">Script</a>
+            </div>
           </td>
         </tr>
         {% else %}

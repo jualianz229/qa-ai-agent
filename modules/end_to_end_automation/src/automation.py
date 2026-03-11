@@ -11,11 +11,17 @@ from core.artifacts import execution_results_path, json_artifact_path
 from core.config import RESULT_DIR
 from core.dashboard_data import build_run_detail
 from modules.end_to_end_automation.src.executor import CodeGenerator
+# new import for refactored logic
+from modules.end_to_end_automation.src import e2e
 from core.jobs import append_job_log, update_job, run_logged_process
 from core.result_analyzer import analyze_execution_results, save_execution_summary
 from core.scanner import Scanner
 from core.utils import is_automation_or_recovery_run
 
+
+# Compatibility wrapper around new e2e implementation.  Existing callers
+# (mainly the Flask route) continue to call ``create_automation_job``; the
+# behaviour is identical although the helper lives in ``e2e.py`` now.
 
 def create_automation_job(
     source_run_name: str,
@@ -23,96 +29,25 @@ def create_automation_job(
     executor_headed: bool = False,
     inject_login: str = "",
 ) -> dict:
-    source_run_name = str(source_run_name or "").strip()
-    if not source_run_name:
-        raise ValueError("Source run is required.")
-    if is_automation_or_recovery_run(source_run_name):
-        raise ValueError("Source run must come from Test Case Generator, not from automation/recovery runs.")
-    source_run_dir = RESULT_DIR / source_run_name
-    if not source_run_dir.exists():
-        raise FileNotFoundError(source_run_name)
-    source_detail = build_run_detail(source_run_dir)
-    url = str(source_detail.get("url", "")).strip()
-    if not url:
-        raise ValueError("Source run does not have a valid URL yet.")
-
-    selected_case_ids = [str(item or "").strip() for item in list(selected_case_ids or []) if str(item or "").strip()]
-    automation_run_name = f"{source_run_name}_auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    job_id = uuid.uuid4().hex[:12]
     payload = {
-        "mode": "automation_test",
-        "url": url,
         "source_run_name": source_run_name,
-        "automation_run_name": automation_run_name,
+        "selected_case_ids": selected_case_ids or [],
         "executor_headed": executor_headed,
-        "selected_case_ids": selected_case_ids,
-        "inject_login": str(inject_login or "").strip(),
+        "inject_login": inject_login,
     }
-    job = {
-        "id": job_id,
-        "status": "queued",
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "payload": payload,
-        "log_lines": [],
-        "run_name": automation_run_name,
-        "command": ["automation-test", source_run_name, automation_run_name],
-    }
-    
-    from core.jobs import jobs, jobs_lock
-    with jobs_lock:
-        jobs[job_id] = job
-    thread = threading.Thread(target=run_automation_job, args=(job_id, payload), daemon=True)
-    thread.start()
-    return job
+    return e2e.create_e2e_job(payload)
 
+
+# the old runner is now a thin wrapper that forwards to the new
+# ``run_e2e_job`` implementation.  it exists so that existing tests or
+# background workers which reference ``run_automation_job`` continue to work.
 
 def run_automation_job(job_id: str, payload: dict) -> None:
-    try:
-        update_job(job_id, status="running")
-        append_job_log(job_id, "[STEP] 1 | Membangun Automation Script (Executor Logic)")
-        prepared = prepare_automation_run(
-            payload["source_run_name"],
-            payload["automation_run_name"],
-            payload.get("selected_case_ids", []),
-            payload.get("executor_headed", False),
-            payload.get("inject_login", ""),
-        )
-        append_job_log(job_id, "[STEP] 1 | done")
-        
-        append_job_log(job_id, f"Prepared automation: {prepared['run_name']}")
-        append_job_log(job_id, f"Selected cases: {len(prepared['selected_ids'])}")
-        
-        if prepared.get("inject_login"):
-            append_job_log(job_id, "Inject login instructions attached to this automation run.")
-            
-        append_job_log(job_id, "[STEP] 2 | Eksekusi E2E (Playwright Runner)")
-        command = [sys.executable, prepared["script_path"].name]
-        update_job(job_id, command=command, run_name=prepared["run_name"])
-        exit_code = run_logged_process(job_id, command, str(prepared["script_path"].parent))
-        append_job_log(job_id, "[STEP] 2 | " + ("done" if exit_code == 0 else "fail"))
+    return e2e.run_e2e_job(job_id, payload)
 
-        append_job_log(job_id, "[STEP] 3 | Save CSV and artifacts")
-        if exit_code == 0 and prepared["results_path"].exists():
-            summary = analyze_execution_results(prepared["results_path"])
-            save_execution_summary(prepared["results_path"], summary)
-            csv_runner = Scanner(RESULT_DIR)
-            csv_runner.update_csv_with_execution_results(prepared["csv_path"], prepared["results_path"], ",")
-            append_job_log(job_id, "[STEP] 3 | done")
-        elif exit_code != 0:
-            append_job_log(job_id, "[STEP] 3 | fail")
 
-        if exit_code == 0:
-            append_job_log(job_id, "[STEP] 0 | Complete job")
-            append_job_log(job_id, "[STEP] 0 | done")
-
-        status = "completed" if exit_code == 0 else "failed"
-        update_job(job_id, status=status, exit_code=exit_code)
-    except Exception as exc:
-        append_job_log(job_id, "[STEP] 3 | fail")
-        append_job_log(job_id, f"Automation test error: {exc}")
-        update_job(job_id, status="failed", exit_code=1)
-
+# prepare_automation_run has been superseded by
+# ``e2e.prepare_e2e_run``.  keep a forwarding stub for compatibility.
 
 def prepare_automation_run(
     source_run_name: str,
@@ -121,6 +56,13 @@ def prepare_automation_run(
     executor_headed: bool,
     inject_login: str = "",
 ) -> dict:
+    return e2e.prepare_e2e_run(
+        source_run_name,
+        automation_run_name,
+        selected_case_ids or [],
+        executor_headed,
+        inject_login,
+    )
     source_run_dir = RESULT_DIR / source_run_name
     automation_run_dir = RESULT_DIR / automation_run_name
     automation_run_dir.mkdir(parents=True, exist_ok=True)

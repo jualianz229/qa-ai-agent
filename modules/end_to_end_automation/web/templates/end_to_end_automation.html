@@ -2,82 +2,108 @@
 {% block title %}End-to-End Automation | TracePilot{% endblock %}
 {% block header_kicker %}Testing Flow{% endblock %}
 {% block header_title %}End-to-End Automation{% endblock %}
-{% block header_subtitle %}Step 2: run existing test cases as automation runs for execution and review.{% endblock
-%}
+{% block header_subtitle %}Run existing test cases as automation runs for execution and review.{% endblock %}
+{% block styles %}
+<style>
+  .button-group {
+    display: inline-flex;
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    padding: 4px;
+    border-radius: 12px;
+    gap: 4px;
+    margin-bottom: 1rem;
+  }
+  .toggle-source {
+    padding: 0.5rem 1.25rem;
+    border: none;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+  }
+  .toggle-source:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+  }
+  .toggle-source.active {
+    background: var(--accent);
+    color: white;
+    box-shadow: 0 4px 12px var(--accent-soft);
+  }
+  .new-badge {
+    background: var(--success);
+    color: white;
+    font-size: 0.65rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 8px;
+    text-transform: uppercase;
+    font-weight: 800;
+  }
+</style>
+{% endblock %}
 {% block content %}
 <section class="panel">
   <div class="panel-head">
     <div>
-      <p class="eyebrow">Automation execution</p>
+      <p class="eyebrow">Automation execution v2.0 <span class="new-badge">Updated</span></p>
       <h2>Generate End-to-End Automation</h2>
     </div>
-    <span class="panel-badge">Step 2</span>
+
   </div>
   <form id="automation-form" class="form-stack">
-    <input id="automation-inject-login-value" type="hidden" name="inject_login" value="">
-    <div class="input-group input-group-full">
-      <label for="automation-source-run">Test case source</label>
-      <select id="automation-source-run" name="source_run_name" required>
-        <option value="">Select test case run</option>
-        {% for run in runs %}
-        <option value="{{ run.get('run_name', '') }}" {% if source_run_name and source_run_name==run.get('run_name', '') %}selected{% endif %}>{{ run.get('run_name', '') }} ({{ run.get('total_cases', 0) }} cases)</option>
-        {% endfor %}
-      </select>
+    <!-- source selector: existing run or file upload -->
+    <div class="input-group">
+      <label>Test case source</label>
+      <div class="button-group" id="source-mode-buttons">
+        <button type="button" data-source="run" class="toggle-source active">Select run</button>
+        <button type="button" data-source="file" class="toggle-source">Upload file</button>
+      </div>
     </div>
-    <div class="form-grid">
-      <div class="input-group template-slot-stable balanced-card">
-        <label for="automation-case-mode">Case mode</label>
-        <select id="automation-case-mode" name="case_mode">
-          <option value="all" selected>All test cases</option>
-          <option value="failed">Failed only</option>
-          <option value="selected">Selected from list</option>
-          <option value="custom">Custom IDs</option>
+
+    <div id="run-section">
+      <div id="run-picker" class="input-group input-group-full">
+        <label for="automation-source-run">Choose run</label>
+        <select id="automation-source-run" name="source_run_name" required>
+          <option value="">Select test case run</option>
+          {% for run in runs %}
+          <option value="{{ run.get('run_name', '') }}" {% if source_run_name and source_run_name==run.get('run_name', '') %}selected{% endif %}>{{ run.get('run_name', '') }} ({{ run.get('total_cases', 0) }} cases)</option>
+          {% endfor %}
         </select>
-        <p class="field-inline-note" id="automation-estimate-note">* Estimated cases to run: -</p>
-        <div class="nested-setting">
-          <label for="automation-headed">Headed browser</label>
-          <select id="automation-headed" name="executor_headed">
-            <option value="no" selected>No</option>
-            <option value="yes">Yes</option>
+      </div>
+      <div class="form-grid">
+        <div class="input-group template-slot-stable balanced-card">
+          <label for="automation-case-mode">Case mode</label>
+          <select id="automation-case-mode" name="case_mode">
+            <option value="all" selected>All test cases</option>
+            <option value="failed">Failed only</option>
+            <option value="selected">Selected from list</option>
+            <option value="custom">Custom IDs</option>
           </select>
-        </div>
-        <div class="form-actions form-actions-inline">
-          <div class="form-actions-buttons">
-            <button class="primary-button" type="submit">Generate End-to-End Automation</button>
+          <p class="field-inline-note" id="automation-estimate-note">* Estimated cases to run: -</p>
+          <div class="nested-setting">
+            <label for="automation-headed">Headed browser</label>
+            <select id="automation-headed" name="executor_headed">
+              <option value="no" selected>No</option>
+              <option value="yes">Yes</option>
+            </select>
+          </div>
+          <div class="form-actions form-actions-inline">
+            <div class="form-actions-buttons">
+              <button class="primary-button" type="submit">Generate End-to-End Automation</button>
+            </div>
           </div>
         </div>
       </div>
-      <div class="input-group template-slot-stable balanced-card">
-        <label for="automation-login-template">Inject Login</label>
-        <select id="automation-login-template" name="inject_login_template">
-          <option value="">No login injection</option>
-          <option value="standard_login">Standard username + password</option>
-          <option value="email_password_login">Email + password</option>
-          <option value="sso_redirect_login">SSO / redirect login</option>
-          <option value="otp_login">OTP / MFA login</option>
-          <option value="session_bootstrap">Token / cookie bootstrap</option>
-        </select>
-        <div id="automation-login-editor-group" class="template-inline-editor" hidden>
-          <label for="automation-login-template-content">Inject Login content (editable)</label>
-          <textarea class="template-editor" id="automation-login-template-content" rows="8"
-            placeholder="Login injection content will appear here when a template is selected." disabled></textarea>
-          <p class="helper-text template-note">* Any edits here will be saved automatically when you generate
-            automation.</p>
-        </div>
-        <div id="automation-login-custom-group" class="template-inline-editor">
-          <label for="automation-login-custom">Custom Inject Login</label>
-          <textarea class="template-editor" id="automation-login-custom" rows="8"
-            placeholder="Examples: use standard_user / secret_sauce, fill email + password, click Microsoft SSO, complete OTP, or preload auth token/cookie."></textarea>
-          <p class="helper-text template-note">* Any edits here will be saved automatically when you generate
-            automation.</p>
-        </div>
+      <div class="input-group input-group-full hidden-panel" id="automation-case-ids-wrap">
+        <label for="automation-case-ids">Case IDs (comma / new line)</label>
+        <textarea id="automation-case-ids" name="case_ids" rows="4" placeholder="TC-001, TC-002"></textarea>
       </div>
-    </div>
-    <div class="input-group input-group-full hidden-panel" id="automation-case-ids-wrap">
-      <label for="automation-case-ids">Case IDs (comma / new line)</label>
-      <textarea id="automation-case-ids" name="case_ids" rows="4" placeholder="TC-001, TC-002"></textarea>
-    </div>
-    <div class="input-group input-group-full hidden-panel" id="automation-case-table-wrap">
+      <div class="input-group input-group-full hidden-panel" id="automation-case-table-wrap">
       <label>Scenario cases</label>
       <div class="table-shell">
         <table class="data-table">
@@ -98,7 +124,27 @@
           </tbody>
         </table>
       </div>
+      </div>
     </div>
+    <!-- END run-section -->
+    
+    <div id="file-upload" class="input-group input-group-full hidden-panel">
+      <label for="automation-cases-file">Upload CSV / JSON file</label>
+      <div id="file-dropzone" class="dropzone">Drop file or click to browse</div>
+      <input id="automation-cases-file" name="cases_file" type="file" accept=".csv,application/json" hidden />
+      <p class="helper-text">
+        File should be either a CSV with header row or a JSON list of case objects.
+        <a href="/api/automation/example-format" class="inline-link" style="margin-left: 0.5rem; font-weight: 600;">Download example.csv</a>
+      </p>
+      <div id="file-field-mapping" class="hidden-panel">
+        <label for="id-column-select">ID column</label>
+        <select id="id-column-select"></select>
+        <label for="title-column-select">Title column</label>
+        <select id="title-column-select"></select>
+      </div>
+    </div>
+
+    <input type="hidden" name="cases" id="automation-cases-json" />
     <div class="artifact-groups" id="automation-case-preview"></div>
     <div class="form-actions">
       <p class="helper-text" id="automation-status" role="status" aria-live="polite"></p>
@@ -126,69 +172,82 @@
     const caseIdsWrap = document.getElementById("automation-case-ids-wrap");
     const caseTableWrap = document.getElementById("automation-case-table-wrap");
     const caseTableBody = document.getElementById("automation-case-table-body");
+    const defaultCaseHeader = caseTableBody?.closest("table")?.querySelector("thead")?.innerHTML || "";
     const caseIdsTextarea = document.getElementById("automation-case-ids");
     const casePreview = document.getElementById("automation-case-preview");
-    const injectLoginValue = document.getElementById("automation-inject-login-value");
-    const loginTemplateSelect = document.getElementById("automation-login-template");
-    const loginEditorGroup = document.getElementById("automation-login-editor-group");
-    const loginCustomGroup = document.getElementById("automation-login-custom-group");
-    const loginTemplateEditor = document.getElementById("automation-login-template-content");
-    const loginCustomEditor = document.getElementById("automation-login-custom");
     const status = document.getElementById("automation-status");
     const inlineQueuePanel = document.getElementById("automation-inline-queue");
     const inlineJobs = document.getElementById("automation-inline-jobs");
     const refreshQueueButton = document.getElementById("automation-refresh-queue");
     const submitButton = form?.querySelector('button[type="submit"]');
     const estimateNote = document.getElementById("automation-estimate-note");
+    const runSection = document.getElementById("run-section");
+    const fileUpload = document.getElementById("file-upload");
+    const sourceModeButtons = document.getElementById("source-mode-buttons");
+    const dropzone = document.getElementById("file-dropzone");
+    const fileInput = document.getElementById("automation-cases-file");
+    let sourceMode = "run";
+    let parsedFileRows = [];
+    const casesJsonInput = document.getElementById("automation-cases-json");
+    const idColumnSelect = document.getElementById("id-column-select");
+    const titleColumnSelect = document.getElementById("title-column-select");
     let isSubmitting = false;
     let currentAutomationJobId = "";
     let inlineQueueTimer = 0;
-    const loginDraftStorageKey = "tracepilot.automation.injectLoginDraft.v1";
     const pageStateKey = "tracepilot.e2e.pageState";
     const jobIdStorageKey = "tracepilot.e2e.currentJobId";
     let currentCaseRows = [];
-    const loginTemplates = {
-      standard_login: `Use a standard username/password login before executing the selected test cases.
 
-Example:
-- Open the target URL or login page first
-- Fill username field with a valid account
-- Fill password field with a valid password
-- Click the main Login / Sign In button
-- Wait until the post-login landing page or dashboard is visible`,
-      email_password_login: `Use an email + password login flow before executing the selected test cases.
 
-Example:
-- Fill email input with a valid email account
-- Fill password input with the matching password
-- Submit the login form
-- Wait until the authenticated page is loaded
-- Reuse the active session for the remaining test steps`,
-      sso_redirect_login: `Use SSO / redirect login before executing the selected test cases.
+    function toggleSourceMode() {
+      if (sourceMode === "run") {
+        runSection.classList.remove("hidden-panel");
+        fileUpload.classList.add("hidden-panel");
+        sourceRun.required = true;
+        if (fileInput) fileInput.required = false;
+        // highlight button
+        updateSourceButtons();
+        // if we have a run selected, make sure preview is up to date
+        if (sourceRun?.value) {
+          refreshCasePreview();
+        }
+      } else {
+        runSection.classList.add("hidden-panel");
+        fileUpload.classList.remove("hidden-panel");
+        sourceRun.required = false;
+        if (fileInput) fileInput.required = true;
+        // highlight button
+        updateSourceButtons();
+        // clear any previously loaded preview when switching to file mode
+        if (casePreview) casePreview.innerHTML = "";
+        if (caseTableBody) caseTableBody.innerHTML = '<tr><td colspan="6">Select a source run to load scenario cases.</td></tr>';
+        currentCaseRows = [];
+        parsedFileRows = [];
+        if (casesJsonInput) casesJsonInput.value = "";
+        if (idColumnSelect) idColumnSelect.innerHTML = "";
+        if (titleColumnSelect) titleColumnSelect.innerHTML = "";
+        if (fileInput) {
+          fileInput.value = "";
+          fileInput.name = "cases_file";
+        }
+        updateEstimatedCaseCount();
+      }
+    }
 
-Example:
-- Click the SSO provider button such as Google or Microsoft
-- Complete the external sign-in flow
-- Return to the application callback URL
-- Wait until the authenticated home page is ready
-- Continue the remaining test steps in the same session`,
-      otp_login: `Use OTP / MFA login before executing the selected test cases.
-
-Example:
-- Complete username/password login first
-- Wait for the OTP or MFA challenge page
-- Enter the OTP code or approval step
-- Confirm the verification action
-- Continue only after the authenticated page is visible`,
-      session_bootstrap: `Bootstrap an authenticated session before executing the selected test cases.
-
-Example:
-- Preload auth state, token, or session cookie
-- Open the protected page directly
-- Verify the user is already authenticated
-- Skip manual login form interaction
-- Continue the selected automation cases with the active session`,
-    };
+    function updateSourceButtons() {
+      if (!sourceModeButtons) return;
+      sourceModeButtons.querySelectorAll(".toggle-source").forEach((btn) => {
+        btn.classList.toggle("active", btn.getAttribute("data-source") === sourceMode);
+      });
+    }
+    sourceModeButtons?.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".toggle-source");
+      if (!btn) return;
+      sourceMode = btn.getAttribute("data-source") || "run";
+      toggleSourceMode();
+    });
+    // initialise visibility on page load
+    toggleSourceMode();
 
     function renderInlineJobs(jobs) {
       if (!inlineJobs) return;
@@ -330,74 +389,190 @@ Example:
       }, 2500);
     }
 
-    function syncInjectLoginValue() {
-      if (!injectLoginValue) return;
-      const templateName = loginTemplateSelect?.value || "";
-      if (templateName) {
-        injectLoginValue.value = loginTemplateEditor?.value || "";
+    // ---------------- file upload helpers ----------------
+    function parseCSV(text) {
+      const items = [];
+      let row = [];
+      let field = "";
+      let inQuotes = false;
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (char === '"') {
+          if (inQuotes && text[i+1] === '"') {
+            field += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === ',' && !inQuotes) {
+          row.push(field);
+          field = "";
+        } else if ((char === '\n' || char === '\r') && !inQuotes) {
+          if (char === '\r' && text[i+1] === '\n') i++;
+          row.push(field);
+          // Only add rows that have content
+          if (row.some(c => c.trim() !== "")) items.push(row);
+          row = [];
+          field = "";
+        } else {
+          field += char;
+        }
+      }
+      if (row.length > 0) {
+        row.push(field);
+        if (row.some(c => c.trim() !== "")) items.push(row);
+      }
+      if (!items.length) return [];
+      const headers = items[0].map(h => h.trim());
+      return items.slice(1).map(r => {
+        const obj = {};
+        headers.forEach((h, idx) => {
+          if (h) obj[h] = (r[idx] || "").trim();
+        });
+        return obj;
+      });
+    }
+
+    function handleFileContent(text, name) {
+      const casePreview = document.getElementById("automation-case-preview");
+      try {
+        let rows = [];
+        if (/\.json$/i.test(name)) {
+          rows = JSON.parse(text);
+          if (!Array.isArray(rows)) {
+            throw new Error("JSON must be a list of case objects.");
+          }
+        } else {
+          rows = parseCSV(text);
+          if (!rows.length) {
+            throw new Error("CSV appears to be empty or missing headers.");
+          }
+          // minimal validation for headers: standard generated csv usually has ID and Title
+          const headers = Object.keys(rows[0]).map(h => h.toLowerCase());
+          if (!headers.includes("id") && !headers.includes("title")) {
+            throw new Error("CSV does not match 'ID' and 'Title' format.");
+          }
+        }
+        
+        if (!rows.length) {
+          throw new Error("The file has no data rows.");
+        }
+
+        parsedFileRows = rows.slice();
+        renderFilePreview(rows);
+        populateMappingSelects(rows);
+        if (casePreview) casePreview.innerHTML = `<span class="panel-badge badge-passed">File: ${name} (${rows.length} cases)</span>`;
+      } catch (err) {
+        parsedFileRows = [];
+        if (casePreview) casePreview.innerHTML = `<span class="panel-badge badge-failed">Error: ${err.message}</span>`;
+        if (caseTableBody) caseTableBody.innerHTML = `<tr><td colspan="6" class="text-danger"><strong>${err.message}</strong><br/>Please use the recommended format from the download link above.</td></tr>`;
+      }
+    }
+
+    function renderFilePreview(rows) {
+      casePreview.innerHTML = "";
+      caseTableBody.innerHTML = "";
+      if (!rows.length) {
+        casePreview.innerHTML = '<span class="panel-badge">No row</span>';
+        caseTableBody.innerHTML = '<tr><td colspan="6">No data found.</td></tr>';
+        currentCaseRows = [];
+        updateEstimatedCaseCount();
         return;
       }
-      injectLoginValue.value = loginCustomEditor?.value || "";
+      currentCaseRows = rows.slice();
+      // show badges for first 14 rows using id/status if present
+      rows.slice(0, 14).forEach((item) => {
+        const badge = document.createElement("span");
+        badge.className = "panel-badge";
+        badge.textContent = `${item.id || "?"} - ${item.status || ""}`;
+        casePreview.appendChild(badge);
+      });
+      // build table from row objects
+      const headers = Object.keys(rows[0]);
+      // update header row for file
+      const table = caseTableBody.closest("table");
+      if (table) {
+        const thead = table.querySelector("thead");
+        if (thead) {
+          thead.innerHTML = `<tr>` + headers.map((h) => `<th>${h}</th>`).join("") + `</tr>`;
+        }
+      }
+      caseTableBody.innerHTML = "";
+      rows.forEach((item) => {
+        const row = document.createElement("tr");
+        const id = item.id || "";
+        const checked = caseMode?.value === "selected" && new Set().has(String(id));
+        row.innerHTML = headers.map((h) => `<td>${(item[h] || "-")}</td>`).join("");
+        caseTableBody.appendChild(row);
+      });
+      updateEstimatedCaseCount();
     }
 
-    function saveLoginDraft() {
-      try {
-        const payload = {
-          template: loginTemplateSelect?.value || "",
-          template_content: loginTemplateEditor?.value || "",
-          custom_content: loginCustomEditor?.value || "",
-        };
-        window.localStorage.setItem(loginDraftStorageKey, JSON.stringify(payload));
-      } catch (_error) {
+    function populateMappingSelects(rows) {
+      const headers = Array.isArray(rows) && rows.length ? Object.keys(rows[0]) : [];
+      idColumnSelect.innerHTML = "";
+      titleColumnSelect.innerHTML = "";
+      headers.forEach((h) => {
+        const opt1 = document.createElement("option"); opt1.value = h; opt1.textContent = h; idColumnSelect.appendChild(opt1);
+        const opt2 = document.createElement("option"); opt2.value = h; opt2.textContent = h; titleColumnSelect.appendChild(opt2);
+      });
+      if (headers.includes("id")) idColumnSelect.value = "id";
+      if (headers.includes("title")) titleColumnSelect.value = "title";
+      if (headers.length) {
+        document.getElementById("file-field-mapping").classList.remove("hidden-panel");
       }
     }
 
-    function restoreLoginDraft() {
-      try {
-        const raw = window.localStorage.getItem(loginDraftStorageKey);
-        if (!raw) return null;
-        const payload = JSON.parse(raw);
-        if (loginTemplateSelect && payload?.template && !loginTemplateSelect.value) {
-          loginTemplateSelect.value = String(payload.template);
-        }
-        if (loginTemplateEditor && payload?.template_content && !loginTemplateEditor.value) {
-          loginTemplateEditor.value = String(payload.template_content);
-        }
-        if (loginCustomEditor && payload?.custom_content && !loginCustomEditor.value) {
-          loginCustomEditor.value = String(payload.custom_content);
-        }
-        return payload;
-      } catch (_error) {
-        return null;
+    function applyFieldMapping() {
+      if (!parsedFileRows.length) return;
+      const idKey = idColumnSelect.value || "id";
+      const titleKey = titleColumnSelect.value || "title";
+      const mapped = parsedFileRows.map((row) => ({
+        id: row[idKey] || "",
+        title: row[titleKey] || "",
+        ...row,
+      }));
+      const jsonStr = JSON.stringify(mapped);
+      if (casesJsonInput) casesJsonInput.value = jsonStr;
+      // replace file input with a JSON blob so server reads our mapped data
+      if (fileInput) {
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const dt = new DataTransfer();
+        dt.items.add(new File([blob], 'cases.json', { type: 'application/json' }));
+        fileInput.files = dt.files;
       }
     }
 
-    function loadInjectLoginTemplate(templateName) {
-      if (!templateName) {
-        if (loginEditorGroup) loginEditorGroup.hidden = true;
-        if (loginCustomGroup) loginCustomGroup.hidden = false;
-        if (loginTemplateEditor) {
-          loginTemplateEditor.value = "";
-          loginTemplateEditor.disabled = true;
-        }
-        if (loginCustomEditor) loginCustomEditor.disabled = false;
-        syncInjectLoginValue();
-        saveLoginDraft();
-        return;
-      }
-      if (loginEditorGroup) loginEditorGroup.hidden = false;
-      if (loginCustomGroup) loginCustomGroup.hidden = true;
-      if (loginTemplateEditor) {
-        loginTemplateEditor.disabled = false;
-        loginTemplateEditor.value = loginTemplates[templateName] || "";
-      }
-      if (loginCustomEditor) {
-        loginCustomEditor.value = "";
-        loginCustomEditor.disabled = true;
-      }
-      syncInjectLoginValue();
-      saveLoginDraft();
+    // dropzone init
+    if (dropzone) {
+      dropzone.addEventListener("click", () => fileInput?.click());
+      dropzone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropzone.classList.add("hover");
+      });
+      dropzone.addEventListener("dragleave", () => dropzone.classList.remove("hover"));
+      dropzone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropzone.classList.remove("hover");
+        const f = e.dataTransfer.files[0];
+        if (f) fileInput.files = e.dataTransfer.files;
+        handleSelectedFile();
+      });
     }
+    if (fileInput) {
+      fileInput.addEventListener("change", () => handleSelectedFile());
+    }
+    function handleSelectedFile() {
+      const f = fileInput?.files && fileInput.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => handleFileContent(reader.result || "", f.name);
+      reader.readAsText(f);
+    }
+
+
+
+
 
     function updateEstimatedCaseCount() {
       const mode = String(caseMode?.value || "all").toLowerCase();
@@ -418,8 +593,15 @@ Example:
     }
 
     async function refreshCasePreview() {
+      // when previewing from a run we already populate currentCaseRows
       const runName = sourceRun.value;
       casePreview.innerHTML = "";
+      // restore header to default
+      const table = caseTableBody.closest("table");
+      if (table) {
+        const thead = table.querySelector("thead");
+        if (thead) thead.innerHTML = defaultCaseHeader;
+      }
       caseTableBody.innerHTML = '<tr><td colspan="6">Loading...</td></tr>';
       currentCaseRows = [];
       updateEstimatedCaseCount();
@@ -439,6 +621,7 @@ Example:
           return;
         }
         currentCaseRows = rows.slice();
+        // if user has mapped file columns this list may be overwritten later
         rows.slice(0, 14).forEach((item) => {
           const badge = document.createElement("span");
           badge.className = "panel-badge";
@@ -489,29 +672,9 @@ Example:
         savePageState();
       }
     });
-    loginTemplateSelect?.addEventListener("change", () => {
-      loadInjectLoginTemplate(loginTemplateSelect.value || "");
-    });
-    loginTemplateEditor?.addEventListener("input", () => {
-      syncInjectLoginValue();
-      saveLoginDraft();
-    });
-    loginCustomEditor?.addEventListener("input", () => {
-      syncInjectLoginValue();
-      saveLoginDraft();
-    });
     try { currentAutomationJobId = String(sessionStorage.getItem(jobIdStorageKey) || ""); } catch (_e) {}
     loadPageState();
-    const restoredLoginDraft = restoreLoginDraft();
     updateCaseMode();
-    loadInjectLoginTemplate(loginTemplateSelect?.value || "");
-    if (restoredLoginDraft && loginTemplateSelect?.value && loginTemplateEditor && restoredLoginDraft.template_content) {
-      loginTemplateEditor.value = String(restoredLoginDraft.template_content);
-    }
-    if (restoredLoginDraft && !loginTemplateSelect?.value && loginCustomEditor && restoredLoginDraft.custom_content) {
-      loginCustomEditor.value = String(restoredLoginDraft.custom_content);
-    }
-    syncInjectLoginValue();
     if (sourceRun?.value) {
       refreshCasePreview();
     }
@@ -542,7 +705,19 @@ Example:
           return;
         }
       }
-      syncInjectLoginValue();
+      // if using file upload mode, prepare mapping and clear run-related fields
+      if (sourceMode === "file") {
+        if (!parsedFileRows.length) {
+          status.textContent = "Select or upload a file first.";
+          isSubmitting = false;
+          if (submitButton) submitButton.disabled = false;
+          return;
+        }
+        applyFieldMapping();
+        sourceRun.value = "";
+        caseIdsTextarea.value = "";
+        caseMode.value = "all";
+      }
       const data = new FormData(form);
       try {
         const response = await fetch("/api/automation-jobs", { method: "POST", body: data });

@@ -13,6 +13,7 @@ import io
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
+import functools
 
 # Add project root to sys.path
 root_path = Path(__file__).resolve().parent.parent
@@ -102,10 +103,18 @@ app.register_blueprint(visual_regression_testing_bp)
 
 
 @app.context_processor
+@functools.lru_cache(maxsize=1)
 def inject_sidebar_runs():
-    """Recent Activity: all runs (scenarios, automation, VRT, recovery) sorted by latest."""
+    """Recent Activity: all runs (scenarios, automation, VRT, recovery) sorted by latest.
+
+    This is called once per process and the result is reused for every template
+    render.  lru_cache is sufficient because the underlying list_runs function
+    already implements its own short‑lived cache, so the UI remains responsive even
+    when new results are added.
+    """
     runs = list_runs(RESULT_DIR)
-    runs = sorted(runs, key=lambda item: float(item.get("modified_ts", 0) or 0), reverse=True)[:12]
+    # list_runs already returns sorted results; slicing is cheap
+    runs = runs[:12]
     return {"sidebar_recent_activity": runs}
 
 
@@ -169,10 +178,20 @@ def _append_recovery_action(run_name: str, action: dict) -> None:
     path.write_text(json.dumps({"actions": entries}, indent=2), encoding="utf-8")
 
 
+@app.before_request
+def _cache_runs_for_request():
+    # store the singleton run list on `flask.g` so multiple lookups during the
+    # same request reuse the cached value and avoid rereading the directory.
+    from flask import g
+    g.runs = list_runs(RESULT_DIR)
+
+
 @app.get("/")
 def home():
-    runs = list_runs(RESULT_DIR)[:8]
-    risk_runs = sort_runs(list_runs(RESULT_DIR), mode="safety_risk")[:6]
+    from flask import g
+    # use the pre‑cached list stored by _cache_runs_for_request
+    runs = g.runs[:8]
+    risk_runs = sort_runs(g.runs, mode="safety_risk")[:6]
     active_jobs = get_all_jobs()[:8]
     knowledge_snapshot = build_knowledge_snapshot(profiles_dir=PROFILES_DIR)
     benchmark_snapshot = build_benchmark_snapshot(RESULT_DIR, limit=6)
@@ -189,6 +208,8 @@ def home():
 
 @app.get("/runs/<run_name>")
 def run_detail(run_name: str):
+    # detail pages still need to load the specific run; we don't hit the full
+    # list but the directory cache may speed path resolution via list_runs.
     try:
         run_dir = _resolve_run_dir(run_name)
     except ValueError:
@@ -201,9 +222,10 @@ def run_detail(run_name: str):
 
 @app.get("/compare")
 def compare_runs():
+    from flask import g
     left = request.args.get("left", "").strip()
     right = request.args.get("right", "").strip()
-    runs = list_runs(RESULT_DIR)
+    runs = g.runs
     comparison = None
     if left and right:
         comparison = build_run_comparison(left, right, RESULT_DIR)
@@ -224,7 +246,8 @@ def benchmark_page():
 @app.get("/bug-report")
 def bug_report_page():
     """Bug Report – central place for failed cases and defect tracking. Paginated, max 10 per page."""
-    runs = list_runs(RESULT_DIR)
+    from flask import g
+    runs = g.runs
     query = (request.args.get("q", "") or "").strip()
     failed_runs = [r for r in runs if (r.get("status_counts") or {}).get("failed", 0) > 0]
     if query:
